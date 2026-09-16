@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "project": "fast-note-sync-headless-client",
+  "status": "handoff-only",
+  "upstreamRepository": "https://github.com/haierkeys/obsidian-fast-note-sync",
+  "upstreamBranch": "master",
+  "upstreamCommit": "1bfb406966d612a61831462bf381bbcd1c73f334",
+  "upstreamPackageVersion": "2.4.0",
+  "forkRepository": "https://github.com/junheng/fast-note-sync-headless-client",
+  "preparedOn": "2026-09-16",
+  "serverReferenceCommit": "7a6c78792c631f999c8a5f725bba5dd7235d6688",
+  "serverReferenceUse": "source comparison only; not an integration-tested compatibility claim"
+}
