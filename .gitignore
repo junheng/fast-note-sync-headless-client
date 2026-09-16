@@ -38,3 +38,10 @@ folderSnapshot.json
 conflict-notes/*.remote.md
 conflict-notes/*.base.md
 syncHashMap.json
+
+# Headless local development and runtime data
+.codegraph/
+.env.*
+!.env.example
+.headless-state/
+.headless-test-data/
