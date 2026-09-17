@@ -15,3 +15,7 @@ export * from "../../src/headless/durable_file_pull";
 export * from "../../src/headless/file_pull";
 export * from "../../src/headless/download_chunks";
 export * from "../../src/headless/scanner";
+export * from "../../src/headless/identity";
+export * from "../../src/headless/outbox";
+export * from "../../src/headless/upload";
+export * from "../../src/headless/pull_collection";

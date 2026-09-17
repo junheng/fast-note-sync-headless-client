@@ -1,9 +1,10 @@
-import { BINARY_PREFIX_FILE_SYNC, requestFileDownload, decodeFileChunk, encodeFileChunk, assembleFileChunks } from "./file_protocol";
+import { pathMutation, renameMutation } from "./mutation_protocol";
+import { BINARY_PREFIX_FILE_SYNC, requestFileDownload, decodeFileChunk, encodeFileChunk, assembleFileChunks, fileUploadCheck } from "./file_protocol";
 export { BINARY_PREFIX_FILE_SYNC } from "./file_protocol";
 import { TFile, TAbstractFile, normalizePath, Platform } from "obsidian";
 
 import { ReceiveFileSyncUpdateMessage, FileUploadMessage, FileSyncChunkDownloadMessage, FileDownloadSession, ReceiveMtimeMessage, ReceivePathMessage, SyncEndData } from "../utils/types";
-import { hashContent, hashArrayBuffer, getPluginDir, dump, dumpError, sleep, isPathExcluded, getSafeCtime, isLargeBinarySyncRisk, describeBinarySyncLimit, showSyncNotice, checkAndNotifyCaseConflict, logMemorySnapshot, hashFileAsync, vaultDelete } from "../utils/helpers";
+import { hashArrayBuffer, getPluginDir, dump, dumpError, sleep, isPathExcluded, getSafeCtime, isLargeBinarySyncRisk, describeBinarySyncLimit, showSyncNotice, checkAndNotifyCaseConflict, logMemorySnapshot, hashFileAsync, vaultDelete } from "../utils/helpers";
 import { FileCloudPreview } from "../storage/file_cloud_preview";
 import { SyncLogManager } from "./sync_log_manager";
 import { HttpApiService } from "../api/http_api_service";
@@ -235,17 +236,8 @@ export const fileModify = async function (file: TAbstractFile, plugin: FastSync,
         logMemorySnapshot(`after modify hash ${file.path}`)
       }
 
-      const data = {
-        vault: plugin.settings.vault,
-        path: file.path,
-        pathHash: hashContent(file.path),
-        contentHash: contentHash,
-        mtime: file.stat.mtime,
-        ctime: getSafeCtime(file.stat),
-        size: file.stat.size,
-        // 始终传递 baseHash 信息，如果不可用则标记 baseHashMissing
-        ...(baseHash !== null ? { baseHash } : { baseHashMissing: true }),
-      }
+      const data = fileUploadCheck(plugin.settings.vault, file.path, contentHash, file.stat.size, baseHash,
+        { mtime: file.stat.mtime, ctime: getSafeCtime(file.stat) });
       // 将 hash 暂存到 pending map，等待服务端 FileUploadAck 后再写入 hashManager
       // Temporarily store hash in pending map, update hashManager only after server FileUploadAck
       // 新建操作覆盖删除意图，清除 pending 防止晚到的 Ack 错误删除新文件 hash
@@ -298,11 +290,7 @@ export const fileDelete = async function (file: TAbstractFile, plugin: FastSync,
 
     plugin.addIgnoredFile(file.path)
     try {
-      const data = {
-        vault: plugin.settings.vault,
-        path: file.path,
-        pathHash: hashContent(file.path),
-      }
+      const data = pathMutation(plugin.settings.vault, file.path)
       await plugin.concurrencyLimiter.waitForSlot(file.path)
       void plugin.websocket.SendMessage("FileDelete", data, undefined, () => {
         // 消息真正写入 TCP 缓冲区后加入 pending set，等待 FileDeleteAck 再删 hash
@@ -346,11 +334,7 @@ export const fileDeleteByPath = async function (filePath: string, plugin: FastSy
     plugin.addIgnoredFile(filePath)
     try {
       await plugin.concurrencyLimiter.waitForSlot(filePath)
-      void plugin.websocket.SendMessage("FileDelete", {
-        vault: plugin.settings.vault,
-        path: filePath,
-        pathHash: hashContent(filePath),
-      }, undefined, () => {
+      void plugin.websocket.SendMessage("FileDelete", pathMutation(plugin.settings.vault, filePath), undefined, () => {
         // 消息真正写入 TCP 缓冲区后加入 pending set，等待 FileDeleteAck 再删 hash
         // Add to pending set only after message is actually buffered; remove hash only on FileDeleteAck
         plugin.pendingFileDeleteAcks.add(filePath)
@@ -426,13 +410,7 @@ export const fileRename = async function (file: TAbstractFile, oldfile: string, 
           }
         }
 
-        const data = {
-          vault: plugin.settings.vault,
-          oldPath: oldfile,
-          oldPathHash: hashContent(oldfile),
-          path: file.path,
-          pathHash: hashContent(file.path),
-        }
+        const data = renameMutation(plugin.settings.vault, oldfile, file.path)
         // 将重命名推入待确认队列，等待服务端 FileRenameAck 后再更新 hashManager
         // Push rename to pending queue; hashManager will be updated after server FileRenameAck
         plugin.pendingFileRenames.push({ oldPath: oldfile, newPath: file.path, contentHash })

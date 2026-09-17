@@ -1,8 +1,16 @@
 import type { FileSyncData } from "../utils/types";
 import type { BatchSyncHost } from "./batch_sync";
 import { sendSyncInBatches } from "./batch_sync";
+import { hashContent } from "../utils/protocol_hash";
 
 export const BINARY_PREFIX_FILE_SYNC = "00";
+
+// Shared FileUploadCheck fields extracted from fileModify.
+export function fileUploadCheck(vault: string, path: string, contentHash: string, size: number,
+  baseHash: string | null, times: { ctime: number; mtime: number }) {
+  return { vault, path, pathHash: hashContent(path), contentHash, ...times, size,
+    ...(baseHash !== null ? { baseHash } : { baseHashMissing: true }) };
+}
 
 // Extracted from operator.handleRequestSend and receiveFileSyncUpdate.
 export async function sendFileInventory(host: BatchSyncHost, vault: string, offlineDeleteEnabled: boolean, data: FileSyncData): Promise<void> {

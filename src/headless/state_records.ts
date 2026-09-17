@@ -14,6 +14,16 @@ interface RecordHeader {
   id: string;
 }
 
+export interface BindingRecord extends RecordHeader {
+  kind: "binding";
+  endpoint: string;
+  serviceId: string | null;
+  subjectId: string;
+  vaultId: string | null;
+  vaultName: string;
+  directory: { path: string; device: string; inode: string };
+}
+
 export interface OperationRecord extends RecordHeader {
   kind: "operation";
   path: string;
@@ -25,6 +35,7 @@ export interface OperationRecord extends RecordHeader {
   expectedRemote: FileVersion | null;
   sessionId: string | null;
   context: string;
+  sequence?: number;
 }
 
 export interface BaselineRecord extends RecordHeader {
@@ -96,13 +107,13 @@ export interface ScanRecord extends RecordHeader {
   byteCount: number;
 }
 
-export type StateRecord = OperationRecord | BaselineRecord | BatchRecord | SessionRecord | ApplicationRecord | ConflictRecord | LocalRequestRecord | ScanRecord;
+export type StateRecord = BindingRecord | OperationRecord | BaselineRecord | BatchRecord | SessionRecord | ApplicationRecord | ConflictRecord | LocalRequestRecord | ScanRecord;
 export type RecordKind = StateRecord["kind"];
 
 const digestPattern = /^[a-f0-9]{64}$/;
 const identifierPattern = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 export const validIdentifier = (value: unknown): value is string => typeof value === "string" && identifierPattern.test(value);
-export const validRecordKind = (value: unknown): value is RecordKind => ["operation", "baseline", "batch", "session", "application", "conflict", "local-request", "scan"].includes(value as string);
+export const validRecordKind = (value: unknown): value is RecordKind => ["binding", "operation", "baseline", "batch", "session", "application", "conflict", "local-request", "scan"].includes(value as string);
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -131,11 +142,21 @@ export function validStateRecord(value: unknown): value is StateRecord {
   if (!object(value) || value.formatVersion !== 1 || !validIdentifier(value.id) || !validRecordKind(value.kind)) return false;
   const header = ["formatVersion", "id", "kind"];
   switch (value.kind) {
+    case "binding":
+      return fields(value, [...header, "endpoint", "serviceId", "subjectId", "vaultId", "vaultName", "directory"]) &&
+        value.id === "identity" && typeof value.endpoint === "string" && value.endpoint.length <= 4096 &&
+        (value.serviceId === null || validIdentifier(value.serviceId)) && validIdentifier(value.subjectId) && (value.vaultId === null || validIdentifier(value.vaultId)) &&
+        typeof value.vaultName === "string" && value.vaultName.length > 0 && value.vaultName.length <= 1024 &&
+        object(value.directory) && fields(value.directory, ["path", "device", "inode"]) &&
+        typeof value.directory.path === "string" && value.directory.path.startsWith("/") && value.directory.path.length <= 4096 &&
+        typeof value.directory.device === "string" && /^\d+$/.test(value.directory.device) &&
+        typeof value.directory.inode === "string" && /^\d+$/.test(value.directory.inode);
     case "scan":
       return fields(value, [...header, "manifest", "fileCount", "directoryCount", "byteCount"]) && value.manifest !== null && validFileVersion(value.manifest) &&
         integer(value.fileCount) && integer(value.directoryCount) && value.fileCount + value.directoryCount <= 10000 && integer(value.byteCount) && value.byteCount <= 256 * 1024 * 1024;
     case "operation":
-      return fields(value, [...header, "path", "action", "targetPath", "status", "base", "desired", "expectedRemote", "sessionId", "context"]) &&
+      return fields(value, [...header, "path", "action", "targetPath", "status", "base", "desired", "expectedRemote", "sessionId", "context", ...(Object.hasOwn(value, "sequence") ? ["sequence"] : [])]) &&
+        (value.sequence === undefined || integer(value.sequence) && value.sequence > 0) &&
         validRelativePath(value.path) && ["create", "modify", "delete", "rename"].includes(value.action as string) &&
         ["pending", "sent", "blocked", "acknowledged"].includes(value.status as string) &&
         validFileVersion(value.base) && validFileVersion(value.desired) && validFileVersion(value.expectedRemote) &&

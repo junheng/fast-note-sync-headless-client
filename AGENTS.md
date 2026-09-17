@@ -11,6 +11,10 @@ not the tip of `master` or `main`. Review unreleased fixes as explicit, tested b
 
 ## Boundaries
 
+- Follow the official stable plugin behavior. Do not fix inherited upstream issues,
+  modify the server, or make stronger remote CAS/identity guarantees a delivery
+  prerequisite. Document inherited limitations; preserve headless persistence,
+  version-specific acknowledgements and local filesystem protections.
 - Reuse upstream protocol behavior and extract narrow host interfaces. Avoid a full
   fake Obsidian runtime or a second handwritten protocol implementation.
 - Keep the original plugin build working while extracting the shared core.

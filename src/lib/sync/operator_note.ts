@@ -1,4 +1,5 @@
-import { writeNoteContent } from "./note_protocol";
+import { pathMutation, renameMutation } from "./mutation_protocol";
+import { writeNoteContent, noteModification } from "./note_protocol";
 import { TFile, TAbstractFile, normalizePath } from "obsidian";
 
 import { ReceiveMessage, ReceiveMtimeMessage, ReceivePathMessage, SyncEndData } from "../utils/types";
@@ -42,17 +43,8 @@ export const noteModify = async function (file: TAbstractFile, plugin: FastSync,
 
       if (content === null) content = await plugin.app.vault.read(file)
 
-      const data = {
-        vault: plugin.settings.vault,
-        ctime: getSafeCtime(file.stat),
-        mtime: file.stat.mtime,
-        path: file.path,
-        pathHash: hashContent(file.path),
-        content: content,
-        contentHash: contentHash,
-        // 始终传递 baseHash 信息，如果不可用则标记 baseHashMissing
-        ...(baseHash !== null ? { baseHash } : { baseHashMissing: true }),
-      }
+      const data = noteModification(plugin.settings.vault, file.path, content, contentHash, baseHash,
+        { ctime: getSafeCtime(file.stat), mtime: file.stat.mtime });
       // 将 hash 暂存到 pending map，等待服务端 NoteModifyAck 后再写入 hashManager
       // Temporarily store hash in pending map, update hashManager only after server NoteModifyAck
       if (contentHash != baseHash) {
@@ -94,11 +86,7 @@ export const noteDelete = async function (file: TAbstractFile, plugin: FastSync,
     plugin.localStorageManager.savePending('pendingNoteModifies', plugin.pendingNoteModifies)
     plugin.addIgnoredFile(file.path)
     try {
-      const data = {
-        vault: plugin.settings.vault,
-        path: file.path,
-        pathHash: hashContent(file.path),
-      }
+      const data = pathMutation(plugin.settings.vault, file.path)
       await plugin.concurrencyLimiter.waitForSlot(file.path)
       void plugin.websocket.SendMessage("NoteDelete", data, undefined, () => {
         // 消息真正写入 TCP 缓冲区后加入 pending set，等待 NoteDeleteAck 再删 hash
@@ -131,11 +119,7 @@ export const noteDeleteByPath = async function (filePath: string, plugin: FastSy
     plugin.addIgnoredFile(filePath)
     try {
       await plugin.concurrencyLimiter.waitForSlot(filePath)
-      void plugin.websocket.SendMessage("NoteDelete", {
-        vault: plugin.settings.vault,
-        path: filePath,
-        pathHash: hashContent(filePath),
-      }, undefined, () => {
+      void plugin.websocket.SendMessage("NoteDelete", pathMutation(plugin.settings.vault, filePath), undefined, () => {
         // 消息真正写入 TCP 缓冲区后加入 pending set，等待 NoteDeleteAck 再删 hash
         // Add to pending set only after message is actually buffered; remove hash only on NoteDeleteAck
         plugin.pendingNoteDeleteAcks.add(filePath)
@@ -194,13 +178,7 @@ export const noteRename = async function (file: TAbstractFile, oldfile: string, 
         contentHash = await hashContentAsync(content)
       }
 
-      const data = {
-        vault: plugin.settings.vault,
-        path: file.path,
-        pathHash: hashContent(file.path),
-        oldPath: oldfile,
-        oldPathHash: hashContent(oldfile),
-      }
+      const data = renameMutation(plugin.settings.vault, oldfile, file.path)
 
       // 将重命名信息存入 Map（key 为 newPath），等待服务端 NoteRenameAck 按 path 精确匹配后再更新 hashManager
       // Store rename info in Map (keyed by newPath), update hashManager only after server NoteRenameAck matches by path
@@ -384,17 +362,8 @@ export const receiveNoteUpload = async function (data: ReceivePathMessage, plugi
     dump(`Empty note upload: ${data.path}`);
   }
 
-  const sendData = {
-    vault: plugin.settings.vault,
-    ctime: getSafeCtime(file.stat),
-    mtime: file.stat.mtime,
-    path: file.path,
-    pathHash: hashContent(file.path),
-    content: content,
-    contentHash: contentHash,
-    // 始终传递 baseHash 信息，如果不可用则标记 baseHashMissing
-    ...(baseHash !== null ? { baseHash } : { baseHashMissing: true }),
-  }
+  const sendData = noteModification(plugin.settings.vault, file.path, content, contentHash, baseHash,
+    { ctime: getSafeCtime(file.stat), mtime: file.stat.mtime });
   // 将 hash 写入 pending map，等待 NoteModifyAck 确认后再写 hashManager
   // 若此路径已有旧 pending（来自中断的 noteModify），覆盖为最新 hash
   // Store hash in pending map; hashManager is written only after NoteModifyAck arrives.

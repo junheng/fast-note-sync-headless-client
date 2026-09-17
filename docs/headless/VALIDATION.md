@@ -1,5 +1,11 @@
 # 基线验证记录
 
+## 2026-09-17：双向发送基础组件增量
+
+新增 `test:sync`，身份绑定、不可变 outbox 和共享笔记/附件上传组件的合成测试通过。覆盖错误服务/主体/Vault/目录拒绝恢复、A 发送后本地变为 B、重复/错序/旧连接确认、Ack 丢失后重开状态并读回恢复、实际 SQLite 日志写入失败不发送、空附件、取消后新会话完整重传，以及缺少能力时保留意图。重命名来源/目标相交的操作按序执行；仅目标内容一致、没有来源消失证据时拒绝确认。
+
+在 Node 24.14.0 下完成全部现有 `test:auth/hash/transport/mirror/vault-name/state/filesystem/application/conflicts/local/scan/cli/pull`、插件 `build`、`build:headless` 和 `lint`，均退出 0。新增套件用固定 pnpm 11.1.2 执行通过，锁文件未变化。随后按用户要求取消虚构 CAS 能力门禁，复用官方删除/重命名，原版 3.5.1 / 3.6.1 均通过 `--headless-write` 的 JSON/protobuf × 笔记/附件四类操作、完整读回与重开状态验证，没有修改服务端。当前 24/50，一次性双向/常驻入口尚未接入，已发布镜像仍为只读预览，完整需求未完成。
+
 ## 当前：正式稳定版 2.4.0
 
 2026-09-16 按用户要求从正式 release `2.4.0` 创建 `headless/stable-2.4.0`，对应提交 `f2b15c09d34e621d2d97ad526fdee03460bac151`。GitHub release 元数据为 `draft=false`、`prerelease=false`；远端 tag 与本地解析提交一致。项目准备文档提交已移植，原 `master` 历史保留。
@@ -66,7 +72,7 @@
 
 共享抽取覆盖上游库存批次、NoteSync/FileSync、PageAck、下载请求与二进制分片；插件与 Node 均消费这些模块。构建断言没有载入 Obsidian、插件 main、operator 或宿主替身；服务器无需桌面环境。实际 Obsidian/Hermes 双向验收仍未完成。
 
-`--identity-only` 另已退出 0：固定服务端当前用户和 Vault 可查询，两份同主体手动令牌观察到相同 UID 和 Vault 元数据。health 返回 `database/status/uptime/version`，没有可用的独立服务身份；`serviceIdentityVerified: false` 是证据范围，`recoveryGate: state-identity-unverified` 表示应采用的门禁要求，并非现有通用同步 CLI 已完成身份门禁。1.8、2.8 与 3.6 未勾选。
+`--identity-only` 另已退出 0：固定服务端当前用户和 Vault 可查询，两份同主体手动令牌观察到相同 UID 和 Vault 元数据。health 返回 `database/status/uptime/version`，没有可用的独立服务身份；`serviceIdentityVerified: false` 是证据范围，`recoveryGate: state-identity-unverified` 是当时的门禁评估（已被 2026-09-17 官方兼容边界取代），并非现有通用同步 CLI 已完成身份门禁。1.8、2.8 与 3.6 未勾选。
 
 ## 完整内容扫描
 

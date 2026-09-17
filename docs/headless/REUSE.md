@@ -12,13 +12,15 @@
 | `src/lib/api/http_api_service.ts` | `FastSync`、宿主请求、重定向与设置、计时器 | 复用所需下载/API 行为，只适配 HTTP I/O；管理升级等功能不暴露为客户端自动动作 | 取消、范围读取、HTTP/业务错误、重定向边界 |
 | `src/lib/utils/helpers.ts` 的 `hashContent` / `hashContentAsync` / `hashArrayBuffer` / `hashFileAsync` | 异步让出依赖 window；文件哈希依赖 Vault adapter、资源 URL 和 Range fetch | 已移至无宿主依赖的 `protocol_hash.ts`，插件保持 `hashFileAsync` 包装；Node 消费同一算法 | UTF-16、emoji、10 MiB 边界、20 MiB 采样盲区、读入期间文件变化 |
 | `src/lib/sync/operator.ts`、`sync_progress_tracker.ts`、`sync_state.ts` | 扫描 Vault、离线删除确认 UI、进度回调、插件状态 | 已抽取 `batch_sync.ts` 和 `sync_protocol.ts`；插件和 Node 共用库存批次、信封页号及 PageAck，Headless 单独持久化完成条件 | End 提前到达、重复/乱序页、写失败、重启不能跳过未完成项 |
-| `src/lib/sync/operator_note.ts` | `TFile`、Vault、路径锁、pending、缓存、通知/冲突 UI | 已抽取 `note_protocol.ts` 的库存发送和内容落盘宿主接口，两端实际消费；笔记发送确认及冲突决策仍待实现 | 同路径 A 的 Ack 不确认 B；远端落盘前复核；删除/重命名前置条件 |
-| `src/lib/sync/operator_file.ts` | `TFile`、Platform、adapter 临时分片、会话、缓存与 HTTP API | 已抽取 `file_protocol.ts` 的库存发送、下载请求、二进制帧编码/解码和分片组装；Node 分片位于状态目录，使用共享范围读取适配；持久化上传状态机仍待实现 | 中断、重复分片、缺片、过期会话、同采样哈希不同内容 |
+| `src/lib/sync/operator_note.ts` | `TFile`、Vault、路径锁、pending、缓存、通知/冲突 UI | 已抽取 `note_protocol.ts` 的库存发送、内容落盘及 `noteModification` 请求字段，两端实际消费；Node 不可变发送/读回确认组件已通过合成故障测试，完整运行入口和冲突决策仍待实现 | 同路径 A 的 Ack 不确认 B；远端落盘前复核；删除/重命名前置条件 |
+| `src/lib/sync/operator_file.ts` | `TFile`、Platform、adapter 临时分片、会话、缓存与 HTTP API | 已抽取 `file_protocol.ts` 的库存发送、下载请求、`fileUploadCheck`、二进制帧编码/解码和分片组装；Node 上传从持久快照读取，中断后新建会话并完整重传；已通过原版 3.5.1/3.6.1 的 JSON/protobuf 上传及路径操作验证，完整调度入口仍待接入 | 中断、重复分片、缺片、过期会话、同采样哈希不同内容 |
 | `src/lib/storage/file_hash_manager.ts`、`local_storage_manager.ts` 与镜像工具 | Obsidian 本地存储、adapter、延迟写入 | 插件保留兼容存储；Headless 事务存储实现共享窄接口，不以插件缓存作为持久化成功凭据 | 已确认基线恢复、落盘失败、崩溃恢复、身份错配 |
 
 ## 必须显式改变的策略
 
-当前 `receiveNoteModifyAck` 按路径查找当时的 pending，不能直接证明确认的是具体发送版本。笔记与附件的删除消息仅携带 Vault、路径及路径哈希，客户端预读不能替代服务端原子条件删除。附件同步 End 中的时间推进不能代替分片完整落盘。上述边界必须通过固定服务端能力证据决定可执行或 `blocked-capability`，不得照搬后宣称数据安全。
+当前 `receiveNoteModifyAck` 按路径查找当时的 pending，不能直接证明确认的是具体发送版本。Node 使用持久化不可变版本和单操作连接确认，保留本地后继编辑，不修改插件自身的 pending 行为。笔记与附件的删除消息仅携带 Vault、路径及路径哈希；按用户要求沿用该官方语义，预读不代表原子条件删除，也不因缺少 CAS 禁止操作。附件 End 不代替 Node 分片落盘与状态提交。实际服务端特征测试说明继承限制，不将上游问题修复加入本项目范围。
+
+`mutation_protocol.ts` 抽取官方笔记/附件删除和重命名的相同请求字段，由两个插件 operator 和 Node 上传组件共同使用；不新增服务端字段。`--headless-write` 已在原版 3.5.1 / 3.6.1 上验证两种编码的正常路径操作。
 
 Headless 新增持久化状态机、内容版本核对及冲突契约；协议动作、编码、分片和分页实现仍来自共享模块。Node 已直接消费共享认证、传输、DTO 与 protobuf 映射；没有实现协议副本或完整的伪 Obsidian runtime。后续每次抽取须在本表补上实际文件、两端消费者和回归证据。
 

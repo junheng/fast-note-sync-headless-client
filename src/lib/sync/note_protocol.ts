@@ -1,6 +1,15 @@
 import type { NoteSyncData } from "../utils/types";
 import type { BatchSyncHost } from "./batch_sync";
 import { sendSyncInBatches } from "./batch_sync";
+import { hashContent } from "../utils/protocol_hash";
+
+// Shared request construction from noteModify and receiveNoteUpload. Durability,
+// conflict policy and Ack handling remain responsibilities of each host.
+export function noteModification(vault: string, path: string, content: string, contentHash: string,
+  baseHash: string | null, times: { ctime: number; mtime: number }) {
+  return { vault, ...times, path, pathHash: hashContent(path), content, contentHash,
+    ...(baseHash !== null ? { baseHash } : { baseHashMissing: true }) };
+}
 
 // The NoteSync branch of operator.handleRequestSend, shared by both hosts.
 export async function sendNoteInventory(host: BatchSyncHost, vault: string, offlineDeleteEnabled: boolean, data: NoteSyncData, onLastSent?: () => void): Promise<void> {

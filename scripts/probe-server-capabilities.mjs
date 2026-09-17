@@ -3,12 +3,12 @@ import { probeNotePull } from "../tests/support/probe-note-pull.mjs";
 import { probeContainerPull } from "../tests/support/probe-container-pull.mjs";
 import { loadBundle } from "../tests/support/load-bundle.mjs";
 import { probeWritePreconditions } from "../tests/support/probe-write-preconditions.mjs";
+import { probeHeadlessWrite } from "../tests/support/probe-headless-write.mjs";
 import * as protocolHash from "../src/lib/utils/protocol_hash.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import vm from "node:vm";
 import ts from "typescript";
@@ -59,7 +59,8 @@ let client;
 let created = false;
 let stage = "create-server";
 const observed = [];
-const configDirectory = mkdtempSync(path.join(tmpdir(), "fns-probe-"));
+mkdirSync(path.join(root, ".local"), { recursive: true, mode: 0o700 });
+const configDirectory = mkdtempSync(path.join(root, ".local", "fns-probe-"));
 try {
   writeFileSync(path.join(configDirectory, "config.yaml"), `server:\n  run-mode: release\n  http-port: ":9000"\napp:\n  is-return-sussess: true\n${process.argv.includes("--note-pull") || process.argv.includes("--file-pull") ? "  sync-down-chunk-num: 2\n" : ""}user:\n  register-is-enable: true\nsecurity:\n  auth-token-key: ${randomUUID()}\n`, { mode: 0o600 });
   podman("run", "-d", "--pull=never", "--name", name, "--memory", "512m", "--cpus", "2", "-v", `${configDirectory}:/fast-note-sync/config`, "-p", "127.0.0.1::9000", image);
@@ -140,6 +141,9 @@ try {
   } else if (process.argv.includes("--note-pull")) {
     const results = await probeNotePull({ endpoint: base, token, request, onStage: value => { stage = `note-pull-${value}`; }, onObserved: value => observed.push(value) });
     console.log(JSON.stringify({ serverVersion, image, results }));
+  } else if (process.argv.includes("--headless-write")) {
+    const results = await probeHeadlessWrite({ endpoint: base, token, request, onStage: value => { stage = `headless-write-${value}`; } });
+    console.log(JSON.stringify({ serverVersion, image, results, upstreamConcurrencySemantics: true }));
   } else if (process.argv.includes("--write-preconditions")) {
     stage = "write-preconditions";
     const results = await probeWritePreconditions({ endpoint: base, token, headers, actions, onStage: value => { stage = `write-preconditions-${value}`; }, onObserved: value => observed.push(value) });

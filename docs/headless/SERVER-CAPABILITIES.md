@@ -63,7 +63,7 @@ node scripts/probe-server-capabilities.mjs --write-preconditions
 
 固定源码依据：`internal/dto/note_dto.go` 的 `NoteDeleteRequest` / `NoteRenameRequest` 没有预期内容版本；`internal/service/note_service.go` 的 `Delete` 按路径读取后标记删除，`Rename` 先检查目标占用再读取/移动来源；`ws_note.go` 保留 `manualMerge` 冲突分支。服务端软删除/历史可能保留恢复资料，本探针没有声称物理擦除；但普通同步视图中的新版本已被旧删除意图移除。
 
-这些是能力边界证据，不是客户端批准执行上述风险操作。现有设计要求不能验证原子前置条件时保留 pending 并报告 `blocked-capability`，不得将预读当作原子条件写；相关运行门禁与持久化状态机尚未实现。大附件采样盲区的用户例外不适用于这里。任务 1.6 的分页、附件/目录及删除历史等矩阵仍待完成。
+这些是上游行为证据。用户于 2026-09-17 再次明确基于官方插件实现、不修复其问题；原“缺少原子前置条件则 blocked-capability”的交付门禁已取消。客户端复用官方删除/重命名请求，保留持久化意图和已发现的冲突，按实际确认及读回提交基线；检查后的并发窗口仍存在，不宣称已经修复。目录/删除历史等尚未覆盖的矩阵继续补齐。
 
 ## 独立 Node 的只读接收（2026-09-17）
 
@@ -126,7 +126,7 @@ node scripts/probe-server-capabilities.mjs --identity-only
 
 2026-09-17 实际取得同主体两份手动令牌的查询结果并比较，仅输出字段名和布尔结论，不输出令牌或用户资料。用户 API 含 `uid`，Vault 列表含 `id/vault/createdAt`；换令牌后 UID 和 Vault 元数据不变，凭据本身及其摘要不应进入持久化绑定。health 字段为 `database/status/uptime/version`，未提供已验证的稳定服务身份。相同版本可以运行在不同后端，相同服务也可以升级版本，因此版本核对不能替代服务身份核对。
 
-任务 1.8 / 2.8 仍未完成。进入通用恢复前需要可信的稳定服务标识来源；目前没有据此开放用户目标的 pending 恢复或旧游标。探针中的 `recoveryGate: state-identity-unverified` 是能力评估结论，不代表运行时绑定模块已实现。用户已明确本轮在本机测试、部署由其他 agent 负责；服务身份来源纳入部署交接，不再要求用户现在配置响应头或新增服务。
+按用户最新边界，独立服务身份不是上游改造要求或启动门禁。客户端以实际可取得的端点、认证主体、Vault 名称及本地目录作绑定，服务/Vault 独立标识不可取得时明确为空。认证失败与已知错配仍拒绝恢复；报告不承诺识别同地址、同主体标识和同名 Vault 背后的后端替换。旧探针的 `recoveryGate` 字段属于历史策略，不能继续作为当前部署要求。
 
 ## 能力矩阵（尚未完成）
 
@@ -155,3 +155,9 @@ node scripts/probe-server-capabilities.mjs --identity-only
 正常版本核对已经发现的差异、pending 和冲突仍须如实保留；不能为解除项目级阻塞而误报某次已知失败操作成功。一般附件同步、只读链路、宿主抽取及其他首版任务继续实施。
 
 真实 Obsidian 三端采样盲区验收留待上游修复；Hermes 业务回执仍是独立的必需验收。本探针成功退出仅表示行为被复现，**不表示 Headless 首版已实现或双向功能验收通过**。
+
+## 2026-09-17：官方协议下的 Headless 发送验证
+
+`node scripts/probe-server-capabilities.mjs --headless-write` 及附加 `--server-version=3.5.1` 均退出 0。两种固定原版服务镜像分别验证 JSON/protobuf × 笔记/附件的创建、修改、跨目录重命名、删除、完整内容读回与状态重开。调用实际 `uploadOperation`、不可变 outbox 和共享协议实现，不使用虚构 CAS 能力，不修改官方服务端。
+
+该结果证明发送组件和原版服务互通；不等于完整双向调度、常驻入口或 Hermes 业务验收完成。已知并发限制仍如本页记录。
