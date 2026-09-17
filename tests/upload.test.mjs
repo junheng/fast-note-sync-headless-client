@@ -155,14 +155,14 @@ try {
     });
   }
 
-  for (const mode of ["file", "empty", "cancel", "invalid-chunk"]) {
+  for (const mode of ["file", "empty", "cancel", "expired-session", "invalid-chunk"]) {
     await fixture(mode, async f => {
       const content = mode === "empty" ? Buffer.alloc(0) : Buffer.from([0, 255, 1, 2, 3, 128, 4, 5, 6]);
       const desired = await f.snapshots.put(content, "file"), op = await f.outbox.prepare("fixture.bin", desired, null);
-      const controller = new AbortController(); let session, chunks = [], attempt = 0, requests = [];
+      const controller = new AbortController(); let session, chunks = [], attempt = 0, requests = [], sessions = [];
       handler = (socket, action, payload) => {
         if (action === "FileUploadCheck") {
-          requests.push(payload); session = randomUUID(); chunks = []; attempt++;
+          requests.push(payload); session = randomUUID(); sessions.push(session); chunks = []; attempt++;
           assert.equal(payload.contentHash, desired.protocolHash);
           queueMicrotask(() => socket.reply("FileUpload", { path: payload.path, pathHash: payload.pathHash, sessionId: session,
             chunkSize: mode === "invalid-chunk" ? 9 * 1024 * 1024 : 3 }, { context: payload.context }));
@@ -172,7 +172,11 @@ try {
           assert.equal(frame.readUInt32BE(38), chunks.length); chunks.push(frame.subarray(42));
           if (mode === "cancel" && attempt === 1) { controller.abort(); return; }
           if (chunks.length === Math.max(1, Math.ceil(content.length / 3))) {
-            assert.deepEqual(Buffer.concat(chunks), content); f.remote.set("fixture.bin", desired);
+            assert.deepEqual(Buffer.concat(chunks), content);
+            // The first session is dropped without an Ack: the server never
+            // completes it, so the client must time out and ask for a new one.
+            if (mode === "expired-session" && attempt === 1) return;
+            f.remote.set("fixture.bin", desired);
             setImmediate(() => socket.reply("FileUploadAck", { path: "fixture.bin" }));
           }
         }
@@ -185,11 +189,19 @@ try {
           assert.equal(f.outbox.baseline("fixture.bin"), null); assert.equal(chunks.length, 1);
           f.reopen();
         }
+        if (mode === "expired-session") {
+          await rejection(() => f.run(op.id, { transferTimeoutMs: 80 }), "upload-timeout");
+          assert.equal(f.outbox.baseline("fixture.bin"), null);
+          assert.equal(f.state.get("operation", op.id).record.status, "sent");
+          assert.equal(f.remote.has("fixture.bin"), false);
+          f.reopen();
+        }
         assert.equal((await f.run(op.id)).status, "confirmed");
         assert.equal(f.outbox.baseline("fixture.bin").version.sha256, desired.sha256);
-        assert.equal(requests.length, mode === "cancel" ? 2 : 1);
+        assert.equal(requests.length, ["cancel", "expired-session"].includes(mode) ? 2 : 1);
+        if (mode === "expired-session") assert.notEqual(sessions[0], sessions[1], "A retry must request a fresh session");
       }
     });
   }
-  console.log("upload.test.mjs: shared note/file transport, durable sends, lost Ack recovery, stale events, cancellation, official mutations and identity gates passed (synthetic service)");
+  console.log("upload.test.mjs: shared note/file transport, durable sends, lost Ack recovery, stale events, cancellation, expired session, official mutations and identity gates passed (synthetic service)");
 } finally { globalThis.WebSocket = NativeSocket; await rm(root, { recursive: true, force: true }); }
