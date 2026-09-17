@@ -1,5 +1,20 @@
 # 基线验证记录
 
+## 2026-09-17：实际 Obsidian 插件与 Node 客户端互操作（8.2）
+
+使用真实 Obsidian 1.12.7（独立 `--user-data-dir` 与隔离 Vault，未读取用户默认实例或默认 Vault）加载当前构建的插件（`main.js` sha256 前缀 `3a3270a6`，提交 `7652bdb5`），指向本机固定镜像 3.6.1 服务端与一次性合成账户；插件 `syncEnabled` 打开、`configSyncEnabled` 关闭，Node 侧使用同一服务端。
+
+- **插件 → 服务端 → Node**：插件上传 `acceptance/plugin-note.md` 与 `acceptance/plugin-attachment.bin`；Node 客户端 `once` 为 `synchronized`、`downloaded: 2`，两侧文件 SHA-256 逐字节一致。
+- **Node → 服务端 → 插件**：Node 新建笔记与附件并上传（`uploaded: 2`），真实插件把两者写入隔离 Vault，SHA-256 与 Node 侧一致。
+- **幂等空同步**：再次 `once` 得到 `uploaded: 0, downloaded: 0`、`synchronized`；插件 Vault 文件 mtime 未变化，没有被重写。
+- **并发冲突**：从同一基线出发，插件与 Node 各自修改 `conflict.md`；Node 侧得到 `status: conflict`、`conflicts: 1`、`uploaded/downloaded: 0`，两侧内容均保留，未静默覆盖。
+- **决议应用**：通过 CLI 控制 socket 提交 `keep-remote` 决议得到 `resolved`，随后 Node 侧与插件侧文件逐字节一致（均为插件版本）。
+- **常驻入口**：`daemon` 提供控制 socket，`status` / `conflicts` / `resolve` 均通过真实控制入口执行，验收结束后停止 daemon。
+
+复现要点（宿主细节）：插件优先读取 LocalStorage 缓存的远端库名，隔离 Vault 目录名与远端库名不一致时必须显式设置；`manualSyncEnabled: true` 会阻止自动同步，需要关闭或手动触发。脱敏回执 `interop-receipt.json` 保存在隔离 fixture 的 `receipts` 目录，仓库内副本位于被忽略的 `.local/obsidian-acceptance/`。用户默认 Obsidian 实例与默认 Vault 未读取、未修改。
+
+OpenSpec 更新为 **48/50**；剩余为外部 Hermes 业务回执（8.5）与依赖它的最终验收报告（8.7）。
+
 ## 2026-09-17：官方目录（FolderSync）通道接入
 
 任务 5.6：目录通道不再缺失。按既有抽取模式复用官方行为，没有第二套协议实现：

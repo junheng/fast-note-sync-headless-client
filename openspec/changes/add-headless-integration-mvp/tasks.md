@@ -70,7 +70,7 @@
 ## 8. 隔离集成与上游维护验收
 
 - [x] 8.1 汇总可重复的协议故障注入套件，验证发送、确认、落盘、提交边界及重复/乱序事件；每个场景都以持久化状态和完整内容判定结果。结果：新增 `docs/headless/FAULT-MATRIX.md` 汇总发送/确认、附件会话与分片、落盘与提交边界、身份与资源四类注入点，逐项标注套件与“持久化状态加完整内容”的判定依据；`test:faults` 一次运行 `test:state/application/conflicts/local/scan/pull/sync/resources` 退出码 0。矩阵只汇总现有断言，不新增通过声明；固定服务端探针仍只用于确认替身未虚构协议能力。
-- [ ] 8.2 使用实际 Obsidian 插件与 Node 客户端在固定服务端完成双向操作、并发冲突和幂等空同步，保存脱敏版本清单与验收回执；仅两个 headless 实例的测试不能替代此项。
+- [x] 8.2 使用实际 Obsidian 插件与 Node 客户端在固定服务端完成双向操作、并发冲突和幂等空同步，保存脱敏版本清单与验收回执；仅两个 headless 实例的测试不能替代此项。结果：真实 Obsidian 1.12.7（独立 profile 与隔离 Vault，未触碰用户默认实例）加载当前构建插件（`main.js` sha256 前缀 `3a3270a6`，提交 `7652bdb5`），指向固定 3.6.1 服务端与合成账户。插件上传笔记与附件后 Node `once` 逐字节一致；Node 新建笔记与附件后真实插件写入隔离 Vault 且摘要一致；再次 `once` 为 `uploaded: 0, downloaded: 0` 且插件 Vault 未被重写；同基线并发修改产生 `status: conflict`、`conflicts: 1`，两侧内容都保留；经 CLI 控制 socket 提交 `keep-remote` 得到 `resolved`，两端随后逐字节一致；`daemon` 的控制入口在同期执行。脱敏回执见隔离 fixture 的 `receipts/interop-receipt.json` 与忽略的 `.local/obsidian-acceptance/`，复现要点与证据见 `docs/headless/VALIDATION.md`。
 - [x] 8.3 汇总模块复用和补丁记录并建立后续上游合并检查清单，运行插件与 Node 的构建、测试及 lint 门禁，验证来源、两端消费者和回归覆盖可追溯。结果：`REUSE.md` 补齐共享模块的插件消费者、Node 消费者与回归入口，修复断开的补丁表并补记只读大小写变体处理；`UPSTREAM.md` 新增上游合并检查清单（稳定 tag、合并分支、差异核对、本地门禁、固定服务端探针、文档与 backport、不触发继承发布流程）。新增 `test:all` 单一门禁运行 14 个套件，插件 `build`、`build:headless`、`lint`、`git diff --check` 与 OpenSpec strict 校验均通过，锁文件未改写；见 `docs/headless/VALIDATION.md`。
 - [x] 8.4 为外部 Hermes Ops 交付隔离验收脚本/步骤、契约和版本清单，明确本仓库负责受控入口而 Ops 负责 Bot 接入及限制直接写权限；通过本仓库合成调用验证交付材料，本项不编辑或部署 Ops 仓库。
 - [ ] 8.5 接收并核对由外部 Ops 执行的 Bot/Obsidian 往返修改、馆长有效及陈旧决策、重启恢复业务回执，并确认 Bot 绕过入口的直接写入被拒绝；缺少环境或回执时本项保持未完成，不使用测试 resolver 结果代替。
