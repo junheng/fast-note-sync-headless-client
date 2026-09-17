@@ -1,5 +1,13 @@
 # 基线验证记录
 
+## 2026-09-17：复用清单、上游合并清单与门禁
+
+任务 8.3：新增 `test:all` 作为单一测试门禁，依次运行 14 个套件（`test:auth/hash/transport/mirror/vault-name/state/filesystem/application/conflicts/local/scan/cli/pull/sync/resources`），耗时约 1 分钟，退出码 0。插件 `build`、`build:headless` 与 `lint` 同时通过，`git diff --check` 与 OpenSpec strict 校验通过，`pnpm-lock.yaml` 未改写。
+
+`REUSE.md` 补齐两端消费者与回归覆盖表：每个共享协议模块列出插件消费者、Node 消费者和对应回归入口；Node 专属宿主/持久化/恢复文件单独列出，避免被误认为协议副本。原本断开的补丁表已合并为一张表，并补记只读大小写变体处理。`UPSTREAM.md` 新增上游合并检查清单（稳定 tag 核实、合并分支、REUSE 差异核对、本地门禁、固定服务端探针、文档与 backport 记录、不触发继承发布流程），并把过期的本地命令列表替换为 `test:all`。
+
+上游改动仍按稳定 release 独立评估，未启用或运行继承的 release / mirror 工作流。OpenSpec 更新为 **41/50**。
+
 ## 2026-09-17：附件上传会话与删除保护复核
 
 任务 5.1 与 5.2 的声明行为已按现有实现逐项复核，缺少的会话丢失场景补齐后均通过。

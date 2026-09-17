@@ -33,22 +33,39 @@ Headless 新增持久化状态机、内容版本核对及冲突契约；协议�
 | `protocol_hash.ts`、`helpers.ts` | 原算法搬移，注入让出与范围读取；插件包装与 Node 文件读取共用 | `test:hash` 固定稳定版金向量、阈值、20 MiB 盲区特征及两种宿主读取 |
 | `websocket_client.ts`、`websocket_auth.ts`、`websocket_obsidian.ts`、`websocket_manager.ts`、`headless/connection.ts` | 抽取宿主 I/O 和认证协商；取消隔离旧连接事件与积压发送 | `test:transport`、`test:auth`；固定服务端 JSON/protobuf 客户端信息往返、取消与独立进程退出 |
 | `headless/state_records.ts`、`headless/state_store.ts` | Node 专属事务元数据存储，不复制插件协议，不改变插件缓存 | `test:state`：事务回滚、重启、强制退出、实际写入权限失败、损坏与未知版本拒绝 |
-| `headless/filesystem.ts` | Linux 受限目录访问、目录 inode 所有权锁；不在插件内引入 Node 文件 API | `test:filesystem`：真实独立进程争锁、崩溃释放、链接替换、路径/大小写保护及写入失败 |
+| `headless/filesystem.ts` | Linux 受限目录访问、目录 inode 所有权锁；不在插件内引入 Node 文件 API。只读查询对同目录大小写变体返回“不存在”，写入/创建/身份声明与枚举仍拒绝变体 | `test:filesystem`：真实独立进程争锁、崩溃释放、链接替换、路径/大小写保护、只读与写入的碰撞差异及写入失败；`test:sync` 的大小写重命名轮次 |
 | `headless/snapshots.ts`、`file_application.ts`、`conflicts.ts` | 外置不可变版本、本地文件与状态提交恢复、最小三方冲突；继续调用共享哈希 | `test:application` 的创建/替换进程崩溃与外部修改；`test:conflicts` 的首次冲突/三方/删除/二进制/重启 |
-
 | `batch_sync.ts`、`sync_protocol.ts`、`note_protocol.ts`、`file_protocol.ts` | 从稳定版 operator/main/manager 抽取，两端实际消费；修复即时 Ack 竞态、宿主间会话串扰和关闭后残留 timer | `test:pull` 与固定服务端 JSON/protobuf 笔记/附件接收探针，插件 build/lint 和继承测试 |
 | `headless/collection_pull.ts`、`note_pull.ts`、`file_pull.ts`、`download_chunks.ts` | Node 完成与资源策略；共享分页状态机，分片全到齐且内容校验/落盘完成后才推进页；拒绝只读上传请求 | 乱序/重复/缺片、内容改变、End 提前、应用失败、取消、完整 SHA-256、跨进程中断恢复 |
 | `headless/download_batch.ts`、`durable_note_pull.ts`、`durable_file_pull.ts` | 事务批次/会话落盘；重启从零请求远端清单，不采用未完成检查点 | SQLite 提交失败、End 不提交、强制终止后的全量重读、幂等重复与本地冲突保留 |
 
 完整插件回归见 `VALIDATION.md`。目前 Node 的认证身份、完整清单、发送/读回与文件落盘已由 `remote.ts` / `reconcile.ts` / `runtime.ts` 接入独立 CLI。本地完整内容扫描与周期核对见 `headless/scanner.ts` / `test:scan`；双向发送确认与通用同步 CLI 已接入，冲突决策通过同一所有者互斥和官方上传/读回路径应用。
 
+`content_routes.ts` 从官方 `HttpApiService.getNoteList/getFileList` 抽取相同查询字段，插件和 Node 的只读身份/回收站查询共用。回收站总行数为零时接受服务端原有的 `list: null`；不新增 REST 写路径。`--reconcile` 与 `--rename-sync` 在原版 3.5.1/3.6.1 验证真实响应、两客户端双向、重命名与 CLI 进程。
+
+`headless/resolution.ts` 仅负责通用决策、版本复核、持久恢复和受控查询；不新增协议动作，不修改上游冲突 UI。决策本地应用复用 `LocalRequests`，远端确认复用 `DurableOutbox` / `uploadOperation`，普通请求恢复跳过尚待重新验证的决策意图。`test:conflicts` 覆盖独立 Bot 进程和七个 SIGKILL 边界。
+
+## 两端消费者与回归覆盖
+
+每个共享模块都要同时被插件和 Node 消费，并有可重复的回归入口；新增抽取点必须补齐本表。
+
+| 共享模块 | 插件消费者 | Node 消费者 | 回归证据 |
+| --- | --- | --- | --- |
+| `src/lib/utils/protocol_hash.ts` | `helpers.ts` 的哈希包装 | `headless/scanner.ts`、`snapshots.ts`、`file_pull.ts`、`upload.ts` | `test:hash`、`test:scan`、`test:pull`、`test:sync` |
+| `src/lib/sync/websocket_action.ts`、`types.ts`、`src/pb/protobuf_mapper.ts` | `websocket_manager.ts`、`websocket_client.ts` | `headless/connection.ts`、`upload.ts`、`pull_collection.ts` | `test:transport`、`test:auth`、固定服务端 JSON/protobuf 探针 |
+| `src/lib/sync/websocket_client.ts`、`websocket_auth.ts` | `websocket_obsidian.ts`、`websocket_manager.ts` | `headless/connection.ts` | `test:transport`、`test:auth` |
+| `src/lib/sync/content_routes.ts` | `http_api_service.ts` 的列表/回收站查询 | `headless/remote.ts` | `test:pull`、`--note-pull` / `--file-pull` 探针 |
+| `src/lib/sync/mutation_protocol.ts` | `operator_note.ts`、`operator_file.ts` | `headless/upload.ts` | `test:sync`、`--headless-write` / `--rename-sync` 探针 |
+| `src/lib/sync/batch_sync.ts`、`sync_protocol.ts` | `operator.ts` | `headless/pull_collection.ts`、`download_batch.ts` | `test:pull`、`test:sync` |
+| `src/lib/sync/note_protocol.ts` | `operator_note.ts` | `headless/note_pull.ts`、`initial_notes.ts`、`file_application.ts`、`upload.ts` | `test:pull`、`test:application`、`test:sync` |
+| `src/lib/sync/file_protocol.ts` | `operator_file.ts` | `headless/file_pull.ts`、`download_chunks.ts`、`upload.ts` | `test:pull`、`test:sync` |
+| `src/lib/storage/file_hash_manager.ts` | 插件基线缓存与镜像恢复 | 无（Node 使用事务基线） | `test:mirror` |
+
+`headless/` 其余文件是 Node 专属宿主、持久化、恢复与入口实现，不复制协议实现：`filesystem.ts`、`state_store.ts`、`state_records.ts`、`snapshots.ts`、`file_application.ts`、`outbox.ts`、`upload.ts`、`remote.ts`、`reconcile.ts`、`resolution.ts`、`control.ts`、`local_requests.ts`、`local_runtime.ts`、`scanner.ts`、`runtime.ts`、`sync_validation.ts`、`limits.ts`。它们由 `test:all`（`test:state/filesystem/application/conflicts/local/scan/cli/pull/sync/resources`）与固定服务端探针覆盖，逐项结果见 `VALIDATION.md`。
+
 ## 证据边界
 
 - Project / Worktree：当前仓库、`headless/stable-2.4.0`，使用本工作区独立 `.codegraph/` 索引。
 - Evidence：CodeGraph 当前源码与调用关系，必要的直接源码片段、稳定版差异及继承测试。
 - Limit：静态调用图不能证明服务器条件写能力，也不能证明真实 Obsidian/Hermes 集成；原测试未覆盖的协议行为仍需新增合成测试。
-- Next：固定服务端能力验证后，按 OpenSpec 逐项抽取并更新本清单。
-
-`content_routes.ts` 从官方 `HttpApiService.getNoteList/getFileList` 抽取相同查询字段，插件和 Node 的只读身份/回收站查询共用。回收站总行数为零时接受服务端原有的 `list: null`；不新增 REST 写路径。`--reconcile` 在原版 3.5.1/3.6.1 验证真实响应、两客户端双向及 CLI 进程。
-
-`headless/resolution.ts` 仅负责通用决策、版本复核、持久恢复和受控查询；不新增协议动作，不修改上游冲突 UI。决策本地应用复用 `LocalRequests`，远端确认复用 `DurableOutbox` / `uploadOperation`，普通请求恢复跳过尚待重新验证的决策意图。`test:conflicts` 覆盖独立 Bot 进程和七个 SIGKILL 边界。
+- Next：升级上游正式 release 时按 `UPSTREAM.md` 的合并检查清单重跑 `test:all`、插件 build/lint 与固定服务端探针，并在本表更新实际文件、两端消费者和回归证据。

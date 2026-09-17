@@ -33,7 +33,8 @@
     "test:scan": "node tests/scanner.test.mjs",
     "test:resources": "node tests/resources.test.mjs",
     "test:cli": "node tests/headless-cli.test.mjs",
-    "test:pull": "node tests/batch-sync.test.mjs && node tests/note-pull.test.mjs && node tests/download-batch.test.mjs && node tests/file-pull.test.mjs"
+    "test:pull": "node tests/batch-sync.test.mjs && node tests/note-pull.test.mjs && node tests/download-batch.test.mjs && node tests/file-pull.test.mjs",
+    "test:all": "run-s test:auth test:hash test:transport test:mirror test:vault-name test:state test:filesystem test:application test:conflicts test:local test:scan test:cli test:pull test:sync test:resources"
   },
   "keywords": [],
   "author": "",

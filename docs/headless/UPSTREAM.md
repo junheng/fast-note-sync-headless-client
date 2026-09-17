@@ -69,23 +69,27 @@ git merge --no-ff <已核实的稳定版提交>
 
 ```sh
 npx --yes pnpm@11.1.2 install --frozen-lockfile
-npx --yes pnpm@11.1.2 run test:hash
-npx --yes pnpm@11.1.2 run test:transport
-npx --yes pnpm@11.1.2 run test:state
-npx --yes pnpm@11.1.2 run test:filesystem
-npx --yes pnpm@11.1.2 run test:application
-npx --yes pnpm@11.1.2 run test:conflicts
-npx --yes pnpm@11.1.2 run test:local
-npx --yes pnpm@11.1.2 run test:auth
-npx --yes pnpm@11.1.2 run test:mirror
-npx --yes pnpm@11.1.2 run test:vault-name
+npx --yes pnpm@11.1.2 run test:all
 npx --yes pnpm@11.1.2 run build
+npx --yes pnpm@11.1.2 run build:headless
 npx --yes pnpm@11.1.2 run lint
 git diff --check
 git diff --exit-code -- pnpm-lock.yaml
 ```
 
-目前 `build` 仍产出插件 `main.js` 等本地产物，不能作为 Headless 已可发布的证据。后续加入 Node 构建和协议/恢复测试时扩充本地门禁。
+`test:all` 依次运行 `test:auth/hash/transport/mirror/vault-name/state/filesystem/application/conflicts/local/scan/cli/pull/sync/resources`；`build` 产出插件 `main.js`，`build:headless` 产出独立 Node CLI。固定服务端探针不属于本地门禁，按 `SERVER-CAPABILITIES.md` 的命令单独运行。
+
+## 上游合并检查清单
+
+每次选择新稳定版时按顺序执行；任何一步未完成都不得把该版本列为已验证支持版本。
+
+1. 核实候选为已发布、非 draft、非 pre-release 的稳定 tag，记录精确提交并写入 `docs/headless/BASELINE.json`；不跟随 `master` / `main` 分支头。
+2. 在干净工作区建立 `sync/upstream-<tag>` 分支后 `git merge --no-ff <已核实提交>`；保留本项目 README、包身份与发布策略，逐文件审查冲突，不整目录选择 ours/theirs。
+3. 按 `docs/headless/REUSE.md` 逐项核对消息字段与编码、哈希、分页、Ack、冲突分支、宿主适配接口、状态格式、依赖与运行时差异；协议行为变化落在共享模块，不新增第二份实现。
+4. 运行本地门禁：`test:all`、`build`、`build:headless`、`lint`、`git diff --check`，并确认 `pnpm-lock.yaml` 未被意外改写。
+5. 运行固定服务端探针（`--connection-only`、`--note-pull`、`--file-pull`、`--headless-write`、`--reconcile`、`--rename-sync`，含 `--server-version=3.5.1` 对照），确认能力矩阵与继承限制仍与实际服务端一致。
+6. 更新 `BASELINE.json`、`REUSE.md`、`VALIDATION.md` 与 OpenSpec 任务状态；移除已被上游吸收的自定义补丁，未发布但必需的修复作为独立 backport 记录来源、理由和回归。
+7. 不在本仓库运行或启用继承的 release / mirror 工作流；发布与生产切换属于独立里程碑，由 Ops 单独执行。
 
 ## 已知上游限制的维护
 
