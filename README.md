@@ -2,7 +2,7 @@
 
 面向服务器、容器和 Agent 的 Fast Note Sync 双向同步客户端，基于 [官方 Obsidian 插件](https://github.com/haierkeys/obsidian-fast-note-sync)维护 fork。
 
-**当前状态：项目定位与实现交接已建立，Headless 服务尚未实现。** 仓库中的现有源码、构建脚本和发布配置主要来自原插件；现有 `main.js` 入口不是可运行的 Headless 客户端。原项目说明保存在 [README.upstream.md](README.upstream.md)。
+**当前状态：独立 Node 只读接收与持久化基础已实现，完整双向同步仍在开发。** 已提供 Dockerfile 和 Compose，支持配置上游、Vault、令牌文件和本地目标目录，运行方式见 [Docker 交付说明](docs/headless/DOCKER.md)。当前容器仅支持向空目录执行一次性只读拉取，不支持常驻同步或恢复旧状态。现有插件 `main.js` 不是 Headless 入口；原项目说明保存在 [README.upstream.md](README.upstream.md)。
 
 ## 目标
 
@@ -19,9 +19,7 @@
 2. [实现交接方案](docs/headless/HANDOFF.md)：已知事实、架构、分阶段任务及验收标准。
 3. [上游维护方案](docs/headless/UPSTREAM.md)：fork 基线、合并方式与发布门禁。
 
-建议给下一位 Agent 的任务：
-
-> 阅读 AGENTS.md 与 docs/headless/HANDOFF.md，先完成阶段 0 和阶段 1：建立上游测试基线，抽出最小宿主接口，并使用合成笔记在隔离目录验证无 Obsidian 运行时的只读同步。记录实际命令与结果；不要接入生产 Vault。完成后按交接方案逐阶段推进双向同步、冲突处理和常驻服务。
+当前实施清单见 [OpenSpec tasks](openspec/changes/add-headless-integration-mvp/tasks.md)，实际验证与已知阻塞见 [VALIDATION.md](docs/headless/VALIDATION.md)。后续推进身份绑定、双向发送与确认、冲突决策应用及常驻服务。
 
 ## 设计方向（待实现）
 
@@ -38,6 +36,6 @@ Node.js 入口 ───┘
 
 ## 开发与来源
 
-运行时、包管理器版本以 `.node-version`、`package.json` 的 `engines` 和 `packageManager` 为准。现有测试与构建命令及其局限见交接方案；服务命令、Docker 镜像与健康端点尚不存在。
+运行时、包管理器版本以 `.node-version`、`package.json` 的 `engines` 和 `packageManager` 为准。`pnpm run build` 构建原插件，`pnpm run build:headless` 构建独立入口 `dist/headless/cli.cjs`。容器构建与运行契约见 Docker 说明；尚未发布正式镜像或提供常驻健康端点。
 
 保留上游 Git 历史、作者信息和 LICENSE。本仓库不是 Obsidian 公司官方客户端。上游 LICENSE 与 package 元数据存在差异，发布前需完成来源核对，详见上游维护方案。

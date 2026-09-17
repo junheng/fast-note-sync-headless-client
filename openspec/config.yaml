@@ -1,0 +1,43 @@
+schema: spec-driven
+
+context: |
+  Language: zh-CN
+  All artifacts must be written in zh-CN.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+  代码、schema 字段和日志使用英文。
+  本项目是 haierkeys/obsidian-fast-note-sync 的维护 fork，目标是 Node.js headless 同步客户端。
+  当前源码仍是 Obsidian 插件，headless 服务尚未实现；不要将规划描述为已有能力。
+  开始设计或实现前阅读 AGENTS.md、docs/headless/HANDOFF.md 和 docs/headless/UPSTREAM.md。
+  上游基线必须是已发布、非草稿、非预发布的稳定版 tag 与精确提交，以 docs/headless/BASELINE.json 为准；不跟随 master/main 分支头，未发布修复作为独立 backport 评审。
+  复用上游协议并抽取窄宿主接口，保持原插件构建可用；避免完整模拟 Obsidian 或另写一套协议。
+  Hermes 部署、凭据和馆长桥接属于独立 Ops 仓库，本项目仅暴露通用冲突契约。
+  同步成功必须有操作 Ack、完整批次和持久化检查点；连接成功或消息已发送不足以证明成功。
+  冲突保留 base/local/remote 并重新验证解决决策所引用的版本；不得仅凭时间戳覆盖。
+  历史缺失、扫描失败或文件缺失不能自动视为删除意图。
+  使用原子写入、持久化 pending、有界资源和状态目录独占锁，并拒绝逃逸 Vault 的路径。
+  使用合成数据与隔离目录验证，不提交生产凭据、笔记、备份、运行状态或 .env。
+  遵循 package.json 固定的 Node.js 与 pnpm 要求，以 pnpm-lock.yaml 为依赖基准。
+  重构前建立继承的测试、构建及 lint 基线；行为变更覆盖崩溃、重复/乱序事件、冲突和离线删除。
+  不运行继承的发布或镜像流程来发布 headless 版本；生产切换由 Ops 显式部署并验证备份。
+
+# Per-artifact rules (optional)
+# Add custom rules for specific artifacts.
+# Example:
+#   rules:
+#     proposal:
+#       - Keep proposals under 500 words
+#       - Always include a "Non-goals" section
+#     tasks:
+#       - Break tasks into chunks of max 2 hours
+
+# Per-operation guidance (optional)
+# Add advisory guidance for how apply and archive work should be conducted.
+# This is separate from artifact rules above.
+# Example:
+#   operations:
+#     apply:
+#       guidance:
+#         - Keep test summaries concise
+#     archive:
+#       guidance:
+#         - Summarize the archive outcome before finishing

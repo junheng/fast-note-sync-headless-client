@@ -33,4 +33,22 @@ export default defineConfig([
       "obsidianmd/prefer-file-manager-trash-file": "error",
     },
   },
+  {
+    files: ["src/headless/**/*.ts", "src/lib/utils/protocol_hash.ts", "src/lib/sync/websocket_client.ts", "src/lib/sync/batch_sync.ts"],
+    rules: {
+      // Shared and Node modules cannot use the Obsidian window timer API.
+      // Keep this rule enabled for the plugin adapters and the rest of the plugin.
+      "obsidianmd/prefer-window-timers": "off",
+    },
+  },
+  {
+    files: ["src/headless/**/*.ts"],
+    rules: {
+      // This entry is a Node process; mobile restrictions still apply to every
+      // plugin/shared module, preventing accidental Node imports into Obsidian.
+      "obsidianmd/no-nodejs-modules": "off",
+      // Headless excludes the default plugin configuration directory explicitly.
+      "obsidianmd/hardcoded-config-path": "off",
+    },
+  },
 ]);

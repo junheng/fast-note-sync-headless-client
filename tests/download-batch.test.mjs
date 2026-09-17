@@ -1,0 +1,31 @@
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { tmpdir } from "node:os";
+import { loadBundle } from "./support/load-bundle.mjs";
+const { exports: { StateStore, DownloadBatch } } = await loadBundle("tests/support/headless-entry.ts");
+const directory = fs.mkdtempSync(path.join(tmpdir(), "fns-pages-"));
+const file = path.join(directory, "state.db");
+let state = new StateStore(file, { create: true });
+try {
+  const batch = new DownloadBatch(state, "download-1", "notes");
+  batch.end(200);
+  assert.equal(state.get("batch", "download-1").record.status, "receiving");
+  assert.throws(() => batch.complete(2, 200), e => e.code === "incomplete-download-batch");
+  batch.page(1); batch.page(1);
+  assert.throws(() => batch.complete(2, 200), e => e.code === "incomplete-download-batch");
+  state.close(); state = new StateStore(file);
+  assert.deepEqual(state.get("batch", "download-1").record.completedPages, [1]);
+  assert.equal(state.get("batch", "download-1").record.status, "receiving");
+  assert.equal(state.get("session", "download-1").record.status, "active");
+  const next = new DownloadBatch(state, "download-2", "notes"); next.end(300); next.page(0); next.page(1);
+  const realCommit = state.commit.bind(state);
+  state.commit = mutations => { if (mutations.some(m => m.record?.status === "committed")) throw new Error("synthetic-full-disk"); realCommit(mutations); };
+  assert.throws(() => next.complete(2, 300), /synthetic-full-disk/);
+  assert.equal(state.get("batch", "download-2").record.status, "receiving"); assert.equal(state.get("session", "download-2").record.status, "active");
+  state.commit = realCommit; next.complete(2, 300);
+  assert.equal(state.get("batch", "download-2").record.status, "committed"); assert.equal(state.get("session", "download-2").record.status, "completed");
+  const interrupted = new DownloadBatch(state, "download-3", "files"); interrupted.end(400); interrupted.page(0); interrupted.interrupt();
+  assert.equal(state.get("batch", "download-3").record.status, "blocked"); assert.throws(() => interrupted.complete(1, 400), e => e.code === "incomplete-download-batch");
+  console.log("download-batch.test.mjs: early End, missing/duplicate pages, restart and atomic checkpoint failure passed");
+} finally { state.close(); fs.rmSync(directory, { recursive: true, force: true }); }

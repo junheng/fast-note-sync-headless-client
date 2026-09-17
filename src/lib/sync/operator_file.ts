@@ -1,3 +1,5 @@
+import { BINARY_PREFIX_FILE_SYNC, requestFileDownload, decodeFileChunk, encodeFileChunk, assembleFileChunks } from "./file_protocol";
+export { BINARY_PREFIX_FILE_SYNC } from "./file_protocol";
 import { TFile, TAbstractFile, normalizePath, Platform } from "obsidian";
 
 import { ReceiveFileSyncUpdateMessage, FileUploadMessage, FileSyncChunkDownloadMessage, FileDownloadSession, ReceiveMtimeMessage, ReceivePathMessage, SyncEndData } from "../utils/types";
@@ -196,7 +198,7 @@ export const resetFileOperations = () => {
   isPluginUnloading = false;
 }
 
-export const BINARY_PREFIX_FILE_SYNC = "00"
+
 
 /**
  * 文件（非笔记）修改事件处理
@@ -574,15 +576,7 @@ export const receiveFileUpload = async function (data: FileUploadMessage, plugin
         // 使用 Uint8Array 视图代替 slice 拷贝，减少内存翻倍
         const chunk = new Uint8Array(content, start, length)
 
-        const sessionIdBytes = new TextEncoder().encode(data.sessionId)
-        const chunkIndexBytes = new Uint8Array(4)
-        const view = new DataView(chunkIndexBytes.buffer)
-        view.setUint32(0, i, false)
-
-        const frame = new Uint8Array(36 + 4 + chunk.byteLength)
-        frame.set(sessionIdBytes, 0)
-        frame.set(chunkIndexBytes, 36)
-        frame.set(chunk, 40)
+        const frame = encodeFileChunk(data.sessionId, i, chunk)
 
         // 在 before 回调中检查是否已被取消,这样可以在数据真正进入 WebSocket 缓冲区之前拦截
         const sendResult = await plugin.websocket.SendBinary(
@@ -787,12 +781,7 @@ export const receiveFileSyncUpdate = async function (data: ReceiveFileSyncUpdate
     }
     plugin.fileDownloadSessions.set(tempKey, tempSession)
 
-    const requestData = {
-      vault: plugin.settings.vault,
-      path: data.path,
-      pathHash: data.pathHash,
-    }
-    void plugin.websocket.SendMessage("FileChunkDownload", requestData)
+    void requestFileDownload(plugin.websocket, plugin.settings.vault, data)
     plugin.totalFilesToDownload++
 
     // 更新同步时间
@@ -1112,12 +1101,7 @@ export const handleFileChunkDownload = async function (buf: ArrayBuffer | Blob, 
     return
   }
 
-  const sessionIdBytes = new Uint8Array(binaryData, 0, 36)
-  const sessionId = new TextDecoder().decode(sessionIdBytes)
-  const chunkIndexBytes = new Uint8Array(binaryData, 36, 4)
-  const view = new DataView(chunkIndexBytes.buffer, chunkIndexBytes.byteOffset, 4)
-  const chunkIndex = view.getUint32(0, false)
-  const chunkData = binaryData.slice(40)
+  const { sessionId, chunkIndex, chunkData } = decodeFileChunk(binaryData)
 
   const session = plugin.fileDownloadSessions.get(sessionId)
   if (!session) {
@@ -1340,35 +1324,12 @@ const handleFileChunkDownloadComplete = async function (session: FileDownloadSes
     // 逐片读入后立即写入目标缓冲区并释放分片引用，避免 chunks 数组与整份 buffer 同时驻留内存 (2x 峰值)
     // Write each chunk into the target buffer as it is read, then drop the reference immediately,
     // instead of accumulating a chunks array alongside the full assembled buffer (avoids the 2x peak).
-    const completeFile = new Uint8Array(session.size)
-    let offset = 0
-    for (let i = 0; i < session.totalChunks; i++) {
-      let chunk: ArrayBuffer | undefined;
+    const completeFile = await assembleFileChunks(session.size, session.totalChunks, async index => {
       if (session.tempDir) {
-        const chunkPath = normalizePath(`${session.tempDir}/${i}.bin`)
-        if (await plugin.app.vault.adapter.exists(chunkPath)) {
-          chunk = await plugin.app.vault.adapter.readBinary(chunkPath)
-        }
-      } else {
-        chunk = session.chunks?.get(i)
-      }
-
-      if (!chunk) {
-        await failFileDownloadSession(plugin, session, `Missing downloaded chunk ${i}`, false)
-        return
-      }
-      if (offset + chunk.byteLength > completeFile.byteLength) {
-        await failFileDownloadSession(plugin, session, `Downloaded file size mismatch: exceeds expected ${session.size}`, false)
-        return
-      }
-      completeFile.set(new Uint8Array(chunk), offset)
-      offset += chunk.byteLength
-    }
-
-    if (offset !== session.size) {
-      await failFileDownloadSession(plugin, session, `Downloaded file size mismatch: got ${offset}, expected ${session.size}`, false)
-      return
-    }
+        const chunkPath = normalizePath(`${session.tempDir}/${index}.bin`)
+        if (await plugin.app.vault.adapter.exists(chunkPath)) return await plugin.app.vault.adapter.readBinary(chunkPath)
+      } else return session.chunks?.get(index)
+    })
 
     const normalizedPath = normalizePath(session.path)
     await plugin.lockManager.withLock(normalizedPath, async () => {

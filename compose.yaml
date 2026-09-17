@@ -1,0 +1,40 @@
+services:
+  fns-headless:
+    image: fast-note-sync-headless-client:local
+    build:
+      context: .
+      args:
+        VCS_REF: ${FNS_BUILD_REVISION:-unknown}
+    user: "${FNS_UID:-1000}:${FNS_GID:-1000}"
+    environment:
+      FNS_ENDPOINT: ${FNS_ENDPOINT:?Set the upstream service URL}
+      FNS_VAULT: ${FNS_VAULT:?Set the remote Vault name}
+      FNS_TOKEN_FILE: /run/secrets/fns_token
+      FNS_VAULT_DIR: /vault
+      FNS_STATE_DIR: /state
+      FNS_LOCAL_WRITER_MODE: exclusive
+    volumes:
+      - type: bind
+        source: ${FNS_LOCAL_VAULT:?Set an empty local directory}
+        target: /vault
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${FNS_LOCAL_STATE:?Set an empty state directory outside the Vault}
+        target: /state
+        bind:
+          create_host_path: false
+    secrets:
+      - fns_token
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 512m
+    cpus: 2
+    pids_limit: 64
+    stop_grace_period: 30s
+    restart: "no"
+
+secrets:
+  fns_token:
+    file: ${FNS_TOKEN_HOST_FILE:?Set the local token file path}

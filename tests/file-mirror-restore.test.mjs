@@ -1,3 +1,4 @@
+import * as protocolHash from "../src/lib/utils/protocol_hash.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -41,6 +42,7 @@ function loadModule(relPath, requireStub, extraGlobals = {}) {
 // --- 载入 helpers.ts（提供 LocalStateFileMirror / debounce 等） ---
 const helpersRequireStub = (id) => {
   switch (id) {
+    case "./protocol_hash": return protocolHash;
     case "obsidian":
       return {
         Notice: class { setMessage() {} hide() {} },
@@ -120,6 +122,7 @@ function makeFakePlugin(localStorageMap, fileMap, { onGetFiles } = {}) {
 }
 
 const MIRROR_PATH = ".obsidian/plugins/fast-note-sync/fileHashMap.json";
+const SYNC_MIRROR_PATH = ".obsidian/plugins/fast-note-sync/syncHashMap.json";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // === 场景 A：写入哈希 → flush → localStorage 与镜像文件都有数据 ===
@@ -140,6 +143,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   const mirrored = JSON.parse(filesA.get(MIRROR_PATH));
   assert.equal(mirrored["notes/a.md"].hash, "hash-a");
   assert.equal(mirrored["img/b.png"].hash, "hash-b");
+  assert.equal(JSON.parse(filesA.get(SYNC_MIRROR_PATH))["notes/a.md"], "hash-a");
 
   // === 场景 B：模拟移动端 localStorage 被系统清除 → 新实例应从镜像恢复，不重建 ===
   ls.clear();
@@ -152,6 +156,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   assert.equal(mgr2.getPathHash("notes/a.md"), "hash-a", "应从镜像恢复哈希");
   assert.equal(mgr2.getValidHash("img/b.png", 222, 20), "hash-b", "mtime/size 应一并恢复");
   assert.equal(ls.has("fns-fileHashMap"), true, "恢复后应回写 localStorage");
+  assert.equal(JSON.parse(ls.get("fns-syncHashMap"))["notes/a.md"], "hash-a");
 }
 
 // === 场景 C：localStorage 与镜像均无 → 走重建路径（getFiles 被调用），不报错 ===
@@ -176,6 +181,47 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   await mgr.initialize();
   assert.equal(mgr.getPathHash("old/n.md"), "h-old", "旧 key 数据应可读到");
   assert.equal(ls.has("fns-fileHashMap"), true, "旧 key 数据应迁移到稳定 key");
+}
+
+// Restoring a local content cache must not overwrite an independently confirmed baseline.
+for (const scenario of [
+  { cacheSource: "mirror", syncSource: "mirror" },
+  { cacheSource: "mirror", syncSource: "local" },
+  { cacheSource: "local", syncSource: "mirror" },
+  { cacheSource: "local", syncSource: "local", legacyCache: true },
+  { cacheSource: "mirror", syncSource: "mirror", emptyBaseline: true },
+  { cacheSource: "local", syncSource: "local", legacyCache: true, emptyBaseline: true },
+]) {
+  const ls = new Map();
+  const files = new Map();
+  const cache = JSON.stringify({
+    "notes/edited.md": scenario.legacyCache
+      ? "local-edit"
+      : { hash: "local-edit", mtime: 10, size: 20 },
+  });
+  const baseline = scenario.emptyBaseline ? {} : {
+    "notes/edited.md": "confirmed-version",
+    "notes/missing-locally.md": "confirmed-missing",
+  };
+  if (scenario.cacheSource === "local") ls.set("fns-fileHashMap", cache);
+  else files.set(MIRROR_PATH, cache);
+  if (scenario.syncSource === "local") ls.set("fns-syncHashMap", JSON.stringify(baseline));
+  else files.set(SYNC_MIRROR_PATH, JSON.stringify(baseline));
+
+  const plugin = makeFakePlugin(ls, files, {
+    onGetFiles: () => assert.fail("A restored cache must not trigger a full rebuild"),
+  });
+  const mgr = new FileHashManager(plugin);
+  await mgr.initialize();
+  assert.equal(mgr.getValidHash("notes/edited.md", scenario.legacyCache ? 0 : 10, scenario.legacyCache ? 0 : 20), "local-edit");
+  assert.equal(mgr.getPathHash("notes/edited.md"), baseline["notes/edited.md"] ?? null);
+  assert.equal(mgr.getPathHash("notes/missing-locally.md"), baseline["notes/missing-locally.md"] ?? null);
+  assert.deepEqual(JSON.parse(ls.get("fns-syncHashMap")), baseline);
+  mgr.flush();
+  await sleep(20);
+  if (files.has(SYNC_MIRROR_PATH)) {
+    assert.deepEqual(JSON.parse(files.get(SYNC_MIRROR_PATH)), baseline);
+  }
 }
 
 console.log("file-mirror-restore.test.mjs: all scenarios passed");

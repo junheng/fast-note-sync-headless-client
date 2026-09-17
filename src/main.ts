@@ -1,3 +1,4 @@
+import { sendPageAcknowledgement } from "./lib/sync/sync_protocol";
 import { Plugin, Platform, addIcon } from "obsidian";
 
 import { dump, dumpError, checkAndNotifyCaseConflict, setLogEnabled, isPathMatch, parseRules, stringifyRules, getPluginDir, showSyncNotice, loadApiToken, saveApiToken, loadApiUrl, saveApiUrl, loadVault, saveVault, loadAutoRedirect, saveAutoRedirect, loadWsPreProbe, saveWsPreProbe, obfuscateToken } from "./lib/utils/helpers";
@@ -140,11 +141,7 @@ export default class FastSync extends Plugin {
 
     dump(`[sendSyncPageAck] Sending ACK for type: ${type}, action: ${action}, pageIndex: ${pageIndex}, context: ${msgContext}`);
 
-    this.websocket.Send(action, {
-      context: msgContext,
-      vault: this.settings.vault,
-      pageIndex: pageIndex
-    });
+    sendPageAcknowledgement(this.websocket, type, this.settings.vault, msgContext, pageIndex);
 
     // 只有当存在真正的 pageState 且非首拉时，才在发送后删除对应状态
     // Only delete from the map if we used a real pageState and it's not the initial ACK

@@ -40,8 +40,10 @@ conflict-notes/*.base.md
 syncHashMap.json
 
 # Headless local development and runtime data
+.local/
 .codegraph/
 .env.*
 !.env.example
 .headless-state/
 .headless-test-data/
+/dist/headless/

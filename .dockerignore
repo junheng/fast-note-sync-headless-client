@@ -1,0 +1,18 @@
+# Allow only build inputs. Local credentials, Git history and runtime data
+# must not enter the build context, including when building from this checkout.
+**
+!Dockerfile
+!.dockerignore
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!.node-version
+!LICENSE
+!src/
+!src/**
+!scripts/
+!scripts/build-headless.mjs
+!scripts/headless-entry.mjs
+!scripts/lib/
+!scripts/lib/fns-credentials.mjs
+!scripts/lib/initial-copy.mjs

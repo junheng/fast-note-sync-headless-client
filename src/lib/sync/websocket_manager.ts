@@ -1,3 +1,5 @@
+import { syncPayload } from "./sync_protocol";
+import { applyAuthorization, sendAuthorization } from "./websocket_auth";
 import { moment, Platform, normalizePath } from "obsidian";
 
 import { handleFileChunkDownload, BINARY_PREFIX_FILE_SYNC, clearUploadQueue, receiveFileUploadSessionNotFound } from "./operator_file";
@@ -6,7 +8,8 @@ import { enSendDTOToProtobuf, deReceivePacket } from "../../pb/protobuf_mapper";
 import { receiveOperators, startupSync, startupFullSync, settleAllBatchSendSessionsOnClose } from "./operator";
 import { SyncLogManager } from "./sync_log_manager";
 import * as WSAction from "./websocket_action";
-import { WebSocketClient } from "./websocket_client";
+import type { WebSocketClient } from "./websocket_client";
+import { createObsidianWebSocketClient } from "./websocket_obsidian";
 import { CLIENT_TYPE } from "../utils/types";
 import type FastSync from "../../main";
 import { $ } from "../../i18n/lang";
@@ -124,7 +127,7 @@ export class WebSocketManager {
 
   constructor(plugin: FastSync) {
     this.plugin = plugin;
-    this.client = new WebSocketClient(this.plugin, {
+    this.client = createObsidianWebSocketClient(this.plugin, {
       getWsUrl: (count) => {
         const client = CLIENT_TYPE;
         const clientName = encodeURIComponent(this.plugin.getClientName());
@@ -160,7 +163,7 @@ export class WebSocketManager {
         return true;
       },
       onOpen: (client) => {
-        client.Send(WSAction.ClientReceiveAuth, this.plugin.settings.apiToken);
+        sendAuthorization(client, this.plugin.settings.apiToken);
         dump("Service authorization");
       },
       onClose: (client, code, reason) => {
@@ -171,8 +174,8 @@ export class WebSocketManager {
         clearUploadQueue();
         this.plugin.concurrencyLimiter.clear();
         // 断线：清空所有在途上行批发送窗口会话的重传 timer（设计稿 §3.2 异常路径表）；
-        // W==0/旧路径下没有会话注册，no-op
-        settleAllBatchSendSessionsOnClose();
+        // Includes legacy stop-and-wait listeners and timers.
+        settleAllBatchSendSessionsOnClose(this);
       },
       onMessage: (client, action, data) => {
         this.handleStructuredMessage(action, data);
@@ -297,11 +300,10 @@ export class WebSocketManager {
     }
 
     if (msgAction === WSAction.ClientReceiveAuth) {
-      if (data.code <= 0 || data.code >= 300) {
+      if (!applyAuthorization(this.client, data, this.plugin.syncState, this.plugin.settings?.protobufEnabled !== false)) {
         showSyncNotice(formatAuthorizationError(data), 6000);
         return;
       } else {
-        this.client.isAuth = true;
         const paths = (data.data?.["paths"] as string[]) || [];
         this.plugin.shareIndicatorManager?.updateSharedPaths(paths);
         if (data.data) {
@@ -309,43 +311,6 @@ export class WebSocketManager {
           const serverChangelog = (data.data["changelog"] as string) ?? this.plugin.localStorageManager.getMetadata("serverChangelog");
           this.plugin.localStorageManager.setMetadata("serverVersion", serverVersion);
           this.plugin.localStorageManager.setMetadata("serverChangelog", serverChangelog);
-        }
-
-        // 握手合并（设计稿 §5.2）：pv>=2 的服务端在 auth 响应追加协商块，此处必须在 StartHandle() 之前
-        // 写入 syncState，因为 sendSyncInBatches 的窗口大小/chunkNum 默认取 syncState 当前值。
-        // 旧服务端（无协商块）：所有协商字段保持 sync_state.ts 的默认值（negotiated=false, window=0），
-        // 即现状 stop-and-wait，行为零变化。
-        // Handshake merge (design §5.2): a pv>=2 server appends a negotiation block to the auth
-        // response. This MUST be written to syncState before StartHandle() is invoked below, since
-        // sendSyncInBatches reads window size/chunkNum defaults from syncState at call time.
-        // Old server (no negotiation block): all fields stay at sync_state.ts defaults
-        // (negotiated=false, window=0) — current stop-and-wait behavior, unchanged.
-        if (data.data) {
-          const nego = data.data;
-          let negotiated = false;
-          if (typeof nego.syncUpChunkNum === "number") {
-            this.plugin.syncState.syncUpChunkNum = nego.syncUpChunkNum;
-            negotiated = true;
-          }
-          if (typeof nego.syncDownChunkNum === "number") {
-            this.plugin.syncState.syncDownChunkNum = nego.syncDownChunkNum;
-            negotiated = true;
-          }
-          if (typeof nego.pipelineWindowUp === "number") {
-            this.plugin.syncState.pipelineWindowUp = nego.pipelineWindowUp;
-            negotiated = true;
-          }
-          if (typeof nego.pipelineWindowDown === "number") {
-            this.plugin.syncState.pipelineWindowDown = nego.pipelineWindowDown;
-            negotiated = true;
-          }
-          this.plugin.syncState.negotiated = negotiated;
-          // protobufAck===true：服务端已在 auth 响应后提前 setUseProtobuf，本连接后续下行帧即为 pb，
-          // 客户端同步跟进，无需再等 ClientInfo 响应触发升级（websocket_client.ts:259 该触发仍保留作旧服务端路径）
-          if (nego.protobufAck === true && this.plugin.settings.protobufEnabled !== false) {
-            this.client.useProtobuf = true;
-            dump("WS Client upgraded to Protobuf via auth negotiation (pv2)");
-          }
         }
 
         dump("Service authorization success");
@@ -425,16 +390,7 @@ export class WebSocketManager {
         // wire value is 1-based. 0/undefined = non-paginated (not merged into payload, downstream
         // reads undefined and takes the legacy path); n>0 = download page n-1, converted to the
         // internal 0-based value and merged into payload.pageIndex
-        const rawPageIndex = typeof data.pageIndex === 'number' ? data.pageIndex : 0;
-        const pageIndex = rawPageIndex > 0 ? rawPageIndex - 1 : undefined;
-
-        let payload: unknown = data.data;
-        if (typeof data.data === 'object' && data.data !== null) {
-          const merged = { ...data.data };
-          if (data.context) merged.context = data.context;
-          if (pageIndex !== undefined) merged.pageIndex = pageIndex;
-          payload = merged;
-        }
+        const payload = syncPayload(data);
         void handler(payload, this.plugin);
         this.client.notifyActivity();
       }

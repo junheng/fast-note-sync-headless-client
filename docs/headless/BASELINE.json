@@ -1,13 +1,22 @@
 {
   "schemaVersion": 1,
   "project": "fast-note-sync-headless-client",
-  "status": "handoff-only",
+  "status": "stable-plugin-baseline-verified",
   "upstreamRepository": "https://github.com/haierkeys/obsidian-fast-note-sync",
-  "upstreamBranch": "master",
-  "upstreamCommit": "1bfb406966d612a61831462bf381bbcd1c73f334",
+  "upstreamRef": "refs/tags/2.4.0",
+  "upstreamTag": "2.4.0",
+  "upstreamCommit": "f2b15c09d34e621d2d97ad526fdee03460bac151",
+  "upstreamReleaseUrl": "https://github.com/haierkeys/obsidian-fast-note-sync/releases/tag/2.4.0",
+  "upstreamReleasePublishedAt": "2026-07-20T08:58:26Z",
+  "upstreamReleasePrerelease": false,
+  "previousPreparationUpstreamCommit": "1bfb406966d612a61831462bf381bbcd1c73f334",
+  "developmentBranch": "headless/stable-2.4.0",
   "upstreamPackageVersion": "2.4.0",
   "forkRepository": "https://github.com/junheng/fast-note-sync-headless-client",
   "preparedOn": "2026-09-16",
   "serverReferenceCommit": "7a6c78792c631f999c8a5f725bba5dd7235d6688",
-  "serverReferenceUse": "source comparison only; not an integration-tested compatibility claim"
+  "serverReferenceUse": "source comparison and bounded attachment capability probe; not full integration compatibility",
+  "serverProbeTag": "3.6.1",
+  "serverProbeImage": "docker.io/haierkeys/fast-note-sync-service@sha256:15833f15e83cee05794c3fe6028c7e41fd36c787f0d651415cad556579fc379f",
+  "serverProbeReport": "docs/headless/SERVER-CAPABILITIES.md"
 }

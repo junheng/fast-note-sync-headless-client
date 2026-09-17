@@ -1,8 +1,3 @@
-import { moment } from "obsidian";
-import { dump, dumpError, isWsUrl, showSyncNotice } from "../utils/helpers";
-
-const safeMoment = moment as unknown as (inp?: unknown) => { format(format: string): string };
-
 // WebSocket 连接常量
 const RECONNECT_BASE_DELAY = 1000; // 重连基础延迟 (毫秒)
 const NON_RECONNECT_REASONS = new Set([
@@ -13,27 +8,24 @@ const NON_RECONNECT_REASONS = new Set([
   "broadcast failed"
 ]);
 
-export interface AppStoragePlugin {
-  app: {
-    vault: {
-      getName: () => string;
-    };
-    loadLocalStorage: (key: string) => unknown;
-    saveLocalStorage: (key: string, value: string | null) => void;
-  };
-  settings?: {
-    protobufEnabled?: boolean;
-  };
+export interface WebSocketConnectionState {
+  loadCount(): number;
+  saveCount(count: number): void;
+  protobufEnabled(): boolean;
 }
 
-function getWsCountStorageKey(plugin: AppStoragePlugin): string {
-  const vaultName = plugin.app.vault.getName();
-  return `fns-${vaultName}-wsCount`;
+export interface WebSocketHost {
+  createSocket(url: string): WebSocket;
+  timestamp(): string;
+  debug(...values: unknown[]): void;
+  error(...values: unknown[]): void;
+  notice(message: string): void;
 }
 
 export interface WebSocketClientOptions {
   getWsUrl: (count: number) => string;
   preConnectProbe?: () => Promise<boolean>;
+  autoReconnect?: boolean;
   
   onOpen?: (client: WebSocketClient) => void;
   onClose?: (client: WebSocketClient, code: number, reason: string) => void;
@@ -46,14 +38,16 @@ export interface WebSocketClientOptions {
 
 export class WebSocketClient {
   public ws: WebSocket;
-  private plugin: AppStoragePlugin;
+  private state: WebSocketConnectionState;
+  private host: WebSocketHost;
+  private generation = 0;
   private options: WebSocketClientOptions;
 
   public isOpen = false;
   public isAuth = false;
   public useProtobuf = false;
-  public checkConnection: number;
-  public checkReConnectTimeout: number;
+  public checkConnection: ReturnType<typeof setTimeout>;
+  public checkReConnectTimeout: ReturnType<typeof setTimeout>;
   public timeConnect = 0;
   // 是否已经在本轮重连失败序列中提示过用户（首次达到原上限第 16 次时提示一次，重连成功后重置）
   private hasNotifiedReconnectFailure = false;
@@ -65,44 +59,16 @@ export class WebSocketClient {
   private activityListeners: Set<() => void> = new Set();
   private binaryHandlers = new Map<string, (data: ArrayBuffer | Blob) => void>();
 
-  constructor(plugin: AppStoragePlugin, options: WebSocketClientOptions) {
-    this.plugin = plugin;
+  constructor(state: WebSocketConnectionState, options: WebSocketClientOptions, host: WebSocketHost) {
+    this.state = state;
     this.options = options;
-
-    const storageKey = getWsCountStorageKey(this.plugin);
-    let storedCount = this.plugin.app.loadLocalStorage(storageKey) as string | null;
-
-    // 迁移逻辑：如果新键无值，尝试按顺序读取旧键
-    if (storedCount === null) {
-      const vaultName = this.plugin.app.vault.getName();
-      // 1. 尝试上一个格式: fast-note-sync-[Vault]-wsCount
-      const prevKey1 = `fast-note-sync-${vaultName}-wsCount`;
-      let oldValue = this.plugin.app.loadLocalStorage(prevKey1) as string | null;
-
-      // 2. 尝试更早的格式: fast-note-sync-[Vault]-ws-count
-      if (oldValue === null) {
-        const prevKey2 = `fast-note-sync-${vaultName}-ws-count`;
-        oldValue = this.plugin.app.loadLocalStorage(prevKey2) as string | null;
-      }
-
-      // 3. 尝试最初始格式: fast-note-sync-ws-count
-      if (oldValue === null) {
-        const oldKey = "fast-note-sync-ws-count";
-        oldValue = this.plugin.app.loadLocalStorage(oldKey) as string | null;
-      }
-
-      if (oldValue !== null) {
-        storedCount = oldValue;
-        this.plugin.app.saveLocalStorage(storageKey, storedCount);
-      }
-    }
-
-    this.count = storedCount ? parseInt(storedCount) : 0;
+    this.host = host;
+    this.count = state.loadCount();
   }
 
   public registerBinaryHandler(prefix: string, handler: (data: ArrayBuffer | Blob) => void) {
     if (prefix.length !== 2) {
-      dumpError("Binary handler prefix must be exactly 2 characters");
+      this.host.error("Binary handler prefix must be exactly 2 characters");
       return;
     }
     this.binaryHandlers.set(prefix, handler);
@@ -138,16 +104,19 @@ export class WebSocketClient {
 
   public async register() {
     if (this.ws && (this.ws.readyState === WebSocket.CONNECTING || this.ws.readyState === WebSocket.OPEN)) {
-      dump("WebSocket already connecting or open, skipping register");
+      this.host.debug("WebSocket already connecting or open, skipping register");
       return;
     }
 
     if (this.registerPromise) {
+      const generation = this.generation;
       await this.registerPromise;
-      return;
+      // A request made after cancellation may start a fresh connection once
+      // the old probe finishes. Requests preceding cancellation stay cancelled.
+      if (generation !== this.generation || this.isRegister) return;
     }
 
-    this.registerPromise = this._doRegister();
+    this.registerPromise = this._doRegister(++this.generation);
     try {
       await this.registerPromise;
     } finally {
@@ -155,7 +124,7 @@ export class WebSocketClient {
     }
   }
 
-  private async _doRegister() {
+  private async _doRegister(generation: number) {
     if (this.ws) {
       this.cleanupWebSocket(this.ws);
     }
@@ -164,8 +133,9 @@ export class WebSocketClient {
 
     if (this.options.preConnectProbe) {
       const isHealthy = await this.options.preConnectProbe();
+      if (generation !== this.generation) return;
       if (!isHealthy) {
-        dump("Health check failed before ws connect, scheduling reconnect...");
+        this.host.debug("Health check failed before ws connect, scheduling reconnect...");
         this.isOpen = false;
         this.notifyStatusChange(false);
         this.checkReconnect();
@@ -174,15 +144,18 @@ export class WebSocketClient {
     }
 
     const wsUrl = this.options.getWsUrl(this.count);
-    if (isWsUrl(wsUrl)) {
-      this.ws = new WebSocket(wsUrl);
+    if (/^wss?:\/\/.+/i.test(wsUrl)) {
+      this.ws = this.host.createSocket(wsUrl);
+      const socket = this.ws;
+      const isCurrent = () => this.ws === socket && generation === this.generation;
       this.ws.binaryType = "arraybuffer";
       this.count++;
-      this.plugin.app.saveLocalStorage(getWsCountStorageKey(this.plugin), this.count.toString());
+      this.state.saveCount(this.count);
 
       this.ws.onerror = (error: Event) => {
-        dump("WebSocket error:", {
-          timestamp: safeMoment().format("YYYY-MM-DD HH:mm:ss.SSS"),
+        if (!isCurrent()) return;
+        this.host.debug("WebSocket error:", {
+          timestamp: this.host.timestamp(),
           url: wsUrl,
           readyState: this.ws.readyState,
           error: error
@@ -191,26 +164,28 @@ export class WebSocketClient {
       };
 
       this.ws.onopen = (e: Event): void => {
+        if (!isCurrent()) return;
         this.timeConnect = 0;
         this.hasNotifiedReconnectFailure = false;
         this.isAuth = false;
         this.useProtobuf = false;
         this.isOpen = true;
-        dump("Service connected", {
-          timestamp: safeMoment().format("YYYY-MM-DD HH:mm:ss.SSS"),
+        this.host.debug("Service connected", {
+          timestamp: this.host.timestamp(),
           url: wsUrl
         });
         this.options.onOpen?.(this);
       };
 
       this.ws.onclose = (e: CloseEvent) => {
+        if (!isCurrent()) return;
         this.isAuth = false;
         this.useProtobuf = false;
         this.isOpen = false;
         this.notifyStatusChange(false);
 
-        dump("Service close details:", {
-          timestamp: safeMoment().format("YYYY-MM-DD HH:mm:ss.SSS"),
+        this.host.debug("Service close details:", {
+          timestamp: this.host.timestamp(),
           code: e.code,
           reason: e.reason,
           wasClean: e.wasClean,
@@ -227,10 +202,11 @@ export class WebSocketClient {
         if (this.isRegister && !NON_RECONNECT_REASONS.has(e.reason)) {
           this.checkReconnect();
         }
-        dump("Service close");
+        this.host.debug("Service close");
       };
 
       this.ws.onmessage = (event: MessageEvent) => {
+        if (!isCurrent()) return;
         if (event.data instanceof ArrayBuffer || event.data instanceof Blob) {
           void (async () => {
             let buf: ArrayBuffer;
@@ -239,7 +215,7 @@ export class WebSocketClient {
             } else {
               buf = event.data as ArrayBuffer;
             }
-            if (buf.byteLength < 2) return;
+            if (!isCurrent() || buf.byteLength < 2) return;
 
             const prefixBytes = new Uint8Array(buf.slice(0, 2));
             const prefixStr = new TextDecoder().decode(prefixBytes);
@@ -258,18 +234,18 @@ export class WebSocketClient {
                   
                   // Only upgrade to Protobuf if the setting is enabled locally
                   // 仅在本地设置启用时才升级为 Protobuf
-                  if (result.action === "ClientInfo" && this.plugin.settings?.protobufEnabled !== false) {
+                  if (result.action === "ClientInfo" && this.state.protobufEnabled()) {
                     this.useProtobuf = true;
-                    dump("WS Client upgraded to Protobuf successfully");
+                    this.host.debug("WS Client upgraded to Protobuf successfully");
                   }
                   
                   this.options.onMessage?.(this, result.action, result);
                 }
               } catch (err) {
-                dumpError("Failed to decode incoming Protobuf message:", err);
+                this.host.error("Failed to decode incoming Protobuf message:", err);
               }
             } else {
-              dump("No handler for binary prefix:", prefixStr);
+              this.host.debug("No handler for binary prefix:", prefixStr);
             }
           })();
 
@@ -288,7 +264,7 @@ export class WebSocketClient {
           const data: unknown = JSON.parse(msgData);
           this.options.onMessage?.(this, msgAction, data);
         } catch (err) {
-          dumpError("Failed to parse incoming JSON message:", err);
+          this.host.error("Failed to parse incoming JSON message:", err);
         }
       };
     }
@@ -307,12 +283,13 @@ export class WebSocketClient {
         ws.close(1000, "Cleanup");
       }
     } catch (e) {
-      dumpError("Error closing WebSocket:", e);
+      this.host.error("Error closing WebSocket:", e);
     }
   }
 
   public unRegister(setUnregistered = false) {
-    window.clearTimeout(this.checkReConnectTimeout);
+    this.generation++;
+    clearTimeout(this.checkReConnectTimeout);
     this.timeConnect = 0;
     this.hasNotifiedReconnectFailure = false;
     this.isOpen = false;
@@ -328,11 +305,12 @@ export class WebSocketClient {
     }
 
     this.notifyStatusChange(false);
-    dump("Service unregister");
+    this.host.debug("Service unregister");
   }
 
   public checkReconnect() {
-    window.clearTimeout(this.checkReConnectTimeout);
+    if (this.options.autoReconnect === false || !this.isRegister) return;
+    clearTimeout(this.checkReConnectTimeout);
     // 不再设硬上限：超过原上限（15 次）后仍持续重试，退避延迟封顶 30 分钟；
     // 首次达到原上限时提示用户一次，之后静默在后台继续重试
     if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
@@ -340,7 +318,7 @@ export class WebSocketClient {
 
       if (this.timeConnect === 16 && !this.hasNotifiedReconnectFailure) {
         this.hasNotifiedReconnectFailure = true;
-        showSyncNotice("同步连接持续失败，将继续在后台重试");
+        this.host.notice("同步连接持续失败，将继续在后台重试");
       }
 
       // Delay backoff: first 3 times 1s, then exponential growth up to 30 min
@@ -348,19 +326,21 @@ export class WebSocketClient {
         ? RECONNECT_BASE_DELAY
         : Math.min(RECONNECT_BASE_DELAY * Math.pow(2, this.timeConnect - 3), 1800000);
 
-      dump(`Service waiting reconnect: ${this.timeConnect}, delay: ${delay}ms`);
+      this.host.debug(`Service waiting reconnect: ${this.timeConnect}, delay: ${delay}ms`);
 
-      this.checkReConnectTimeout = window.setTimeout(() => {
+      const generation = this.generation;
+      this.checkReConnectTimeout = setTimeout(() => {
+        if (generation !== this.generation || !this.isRegister) return;
         void this.register();
       }, delay);
     }
   }
 
   public triggerReconnect() {
-    dump("Triggering manual reconnect due to network change");
+    this.host.debug("Triggering manual reconnect due to network change");
     this.timeConnect = 0;
     this.hasNotifiedReconnectFailure = false;
-    window.clearTimeout(this.checkReConnectTimeout);
+    clearTimeout(this.checkReConnectTimeout);
     void this.register();
   }
 
@@ -369,8 +349,9 @@ export class WebSocketClient {
       return;
     }
 
-    while (this.ws.bufferedAmount > maxBufferSize) {
-      await new Promise(resolve => window.setTimeout(resolve, 50));
+    const socket = this.ws;
+    while (this.ws === socket && socket.readyState === WebSocket.OPEN && socket.bufferedAmount > maxBufferSize) {
+      await new Promise(resolve => setTimeout(resolve, 50));
     }
   }
 
@@ -379,8 +360,10 @@ export class WebSocketClient {
       return true; // Cancelled
     }
 
+    const socket = this.ws;
     await this.waitForBufferDrain();
 
+    if (this.ws !== socket || !socket || socket.readyState !== WebSocket.OPEN) return true;
     this.Send(action, data, () => {
       after?.();
       this.notifyActivity();
@@ -389,7 +372,7 @@ export class WebSocketClient {
 
   public Send(action: string, data: unknown, after?: () => void) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      dump(`Service not connected, message dropped (will rely on next sync cycle): ${action}`);
+      this.host.debug(`Service not connected, message dropped (will rely on next sync cycle): ${action}`);
       return;
     }
 
@@ -410,7 +393,7 @@ export class WebSocketClient {
         bytesWithPrefix.set(bytes, prefixBytes.length);
         this.ws.send(bytesWithPrefix);
       } catch (err) {
-        dumpError(`Failed to serialize Protobuf message for action: ${action}`, err);
+        this.host.error(`Failed to serialize Protobuf message for action: ${action}`, err);
         // Fallback to text JSON
         this.sendTextFallback(action, data);
       }
@@ -448,11 +431,12 @@ export class WebSocketClient {
       return 'cancelled';
     }
 
+    const socket = this.ws;
     await this.waitForBufferDrain();
 
     // 等待缓冲区排空期间连接可能已断开，发送前再次确认，避免对已关闭的 socket 调用 send()
     // Connection may have dropped while waiting for the buffer to drain; re-check before sending
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+    if (this.ws !== socket || !socket || socket.readyState !== WebSocket.OPEN) {
       return 'closed';
     }
 

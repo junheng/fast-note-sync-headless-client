@@ -1,3 +1,4 @@
+import { writeNoteContent } from "./note_protocol";
 import { TFile, TAbstractFile, normalizePath } from "obsidian";
 
 import { ReceiveMessage, ReceiveMtimeMessage, ReceivePathMessage, SyncEndData } from "../utils/types";
@@ -295,23 +296,14 @@ export const receiveNoteSyncModify = async function (data: ReceiveMessage, plugi
             return
           }
 
-          await plugin.app.vault.modify(file, data.content, { ...(data.ctime > 0 && { ctime: data.ctime }), ...(data.mtime > 0 && { mtime: data.mtime }) })
-        } else {
-          const folder = normalizedPath.split("/").slice(0, -1).join("/")
-          if (folder != "") {
-            const dirExists = plugin.app.vault.getFolderByPath(folder)
-            if (dirExists == null) {
-              try {
-                await plugin.app.vault.createFolder(folder)
-              } catch (e) {
-                // 并发竞争时只有一个调用成功，另一方忽略"已存在"错误
-                // In concurrent race only one call succeeds; ignore "already exists" error
-                if (!plugin.app.vault.getFolderByPath(folder)) throw e
-              }
-            }
-          }
-          await plugin.app.vault.create(normalizedPath, data.content, { ...(data.ctime > 0 && { ctime: data.ctime }), ...(data.mtime > 0 && { mtime: data.mtime }) })
         }
+        await writeNoteContent({
+          hasFile: path => plugin.app.vault.getFileByPath(path) !== null,
+          hasFolder: path => plugin.app.vault.getFolderByPath(path) !== null,
+          createFolder: path => plugin.app.vault.createFolder(path),
+          modify: (path, content, times) => plugin.app.vault.modify(plugin.app.vault.getFileByPath(path)!, content, times),
+          create: (path, content, times) => plugin.app.vault.create(path, content, times),
+        }, normalizedPath, data);
         if (data.lastTime && data.lastTime > Number(plugin.localStorageManager.getMetadata("lastNoteSyncTime"))) {
           plugin.localStorageManager.setMetadata("lastNoteSyncTime", data.lastTime)
         }
