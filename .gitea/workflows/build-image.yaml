@@ -42,7 +42,11 @@ jobs:
           trap 'rm -rf -- "$DOCKER_CONFIG"' EXIT
           node <<'NODE'
           const fs = require('node:fs');
-          const config = {};
+          const config = { auths: {
+            [process.env.REGISTRY_HOST]: {
+              auth: Buffer.from(`${process.env.REGISTRY_USERNAME}:${process.env.REGISTRY_PASSWORD}`).toString('base64'),
+            },
+          }};
           if (process.env.BUILD_PROXY_URL) {
             config.proxies = { default: {
               httpProxy: process.env.BUILD_PROXY_URL,
@@ -53,8 +57,6 @@ jobs:
           fs.writeFileSync(`${process.env.DOCKER_CONFIG}/config.json`,
             JSON.stringify(config), { mode: 0o600 });
           NODE
-          printf '%s' "$REGISTRY_PASSWORD" |
-            docker login "$REGISTRY_HOST" --username "$REGISTRY_USERNAME" --password-stdin
           image="$REGISTRY_HOST/$(printf '%s' "$IMAGE_PATH" | tr '[:upper:]' '[:lower:]')"
           docker buildx build --builder default \
             --platform linux/arm64 \
