@@ -123,7 +123,7 @@ export class SafeDirectory {
     }
   }
 
-  private withParent<T>(relative: string, operation: (fd: number, leaf: string) => T, allowedAlias?: string, checkLeaf = true): T {
+  private withParent<T>(relative: string, operation: (fd: number, leaf: string) => T, allowedAlias?: string, checkLeaf = true, absentOnVariant = false): T {
     this.assertIdentity();
     if (!validRelativePath(relative) || relative.split("/").some(part => folded(part).startsWith(INTERNAL_PREFIX))) throw new FilesystemError("invalid-path");
     const parts = relative.split("/");
@@ -131,13 +131,13 @@ export class SafeDirectory {
     let fd = this.fd;
     try {
       for (const part of parts.slice(0, -1)) {
-        this.checkName(fd, part);
+        this.checkName(fd, part, undefined, absentOnVariant);
         const next = openSync(`${anchor(fd)}/${part}`, DIRECTORY_FLAGS);
         if (fd !== this.fd) closeSync(fd);
         fd = next;
       }
       const leaf = parts[parts.length - 1];
-      if (checkLeaf) this.checkName(fd, leaf, allowedAlias);
+      if (checkLeaf) this.checkName(fd, leaf, allowedAlias, absentOnVariant);
       this.assertIdentity();
       this.assertParent(fd, relative);
       return operation(fd, leaf);
@@ -151,8 +151,15 @@ export class SafeDirectory {
     if (realpathSync(anchor(fd)) !== expected) throw new FilesystemError("identity-mismatch");
   }
 
-  private checkName(fd: number, requested: string, allowedAlias?: string): void {
-    if (names(fd).some(name => name !== requested && name !== allowedAlias && folded(name) === folded(requested))) throw new FilesystemError("case-collision");
+  // A read-only lookup answers "this name does not exist here" when only a
+  // differently cased sibling exists; a case-only path change such as
+  // `renamed.md` to `Renamed.md` legitimately leaves the old name behind.
+  // Claiming identity or publishing bytes stays strict and still refuses to
+  // create or claim a case variant.
+  private checkName(fd: number, requested: string, allowedAlias?: string, absentOnVariant = false): void {
+    if (names(fd).some(name => name !== requested && name !== allowedAlias && folded(name) === folded(requested))) {
+      throw new FilesystemError(absentOnVariant ? "not-found" : "case-collision");
+    }
   }
 
   fileIdentity(relative: string, aliasPath?: string): string | null {
@@ -280,7 +287,7 @@ export class SafeDirectory {
         this.assertParent(parent, relative);
         return bytes;
       } finally { closeSync(fd); }
-    });
+    }, undefined, true, true);
   }
 
   readOptional(relative: string): Buffer | null {

@@ -82,6 +82,10 @@ try {
 
   fs.writeFileSync(path.join(vault, "Case.md"), "case");
   expect(() => owner.vault.write("case.md", bytes("case"), "create"), "case-collision");
+  // A read-only lookup treats a differently cased sibling as absent; it never
+  // returns the variant's bytes, and publishing still refuses the variant.
+  assert.equal(owner.vault.readOptional("case.md"), null);
+  assert.equal(owner.vault.readOptional("Case.md").toString(), "case");
   fs.writeFileSync(path.join(vault, "case.md"), "collision");
   expect(() => owner.vault.list(), "case-collision");
   fs.unlinkSync(path.join(vault, "case.md"));

@@ -105,6 +105,88 @@ try {
   assert.equal(snapshots.read(conflict.remote).toString(), "remote conflict");
   state.close(); owner.close(); open();
   result = await sync.once(); assert.equal(result.conflicts, 1); assert.equal(writes, beforeConflictWrites);
-  console.log("reconcile.test.mjs: bidirectional cycles, restart, history, rename, concurrent edits and retained conflicts passed");
+  // Clear the retained conflict so the rename scenarios below start clean.
+  assert.equal((await sync.resolve({ schemaVersion: 1, decisionId: "clear-retained", conflictId: conflict.id, action: "keep-remote",
+    expectedLocal: { sha256: conflict.local.sha256, size: conflict.local.size },
+    expectedRemote: { sha256: conflict.remote.sha256, size: conflict.remote.size } })).status, "resolved");
+  result = await sync.once(); assert.equal(result.status, "synchronized");
+  // Unreliable offline recognition of a rename publishes the new path before
+  // the old one is removed; absence alone never authorizes the deletion.
+  await edit("offline-a.md", "offline rename", "offline-rename-base");
+  result = await sync.once(); assert.equal(result.status, "synchronized");
+  const uploads = [];
+  const peerUpload = peer.upload;
+  peer.upload = async function (id, signal) {
+    const operation = state.get("operation", id).record;
+    uploads.push(operation.targetPath ? `rename:${operation.path}` : operation.desired ? `put:${operation.path}` : `delete:${operation.path}`);
+    return await peerUpload.call(this, id, signal);
+  };
+  owner.vault.createDirectories("offline-moved");
+  owner.vault.move("offline-a.md", "offline-moved/offline-b.md");
+  result = await sync.once(); assert.equal(result.status, "synchronized");
+  assert.deepEqual(uploads, ["put:offline-moved/offline-b.md", "delete:offline-a.md"]);
+  assert.equal(files.has("offline-a.md"), false);
+  assert.equal(snapshots.read(files.get("offline-moved/offline-b.md")).toString(), "offline rename");
+  peer.upload = peerUpload;
+  // A remote case-only rename cannot be represented as two coexisting names
+  // locally. The authoritative removal and the verified target must both land,
+  // and later cycles must not fail on the retired name.
+  await edit("nested/case.md", "case synthetic", "case-base");
+  result = await sync.once(); assert.equal(result.status, "synchronized");
+  assert.ok(files.has("nested/case.md"));
+  files.set("nested/Case.md", files.get("nested/case.md"));
+  files.delete("nested/case.md"); deleted.add("nested/case.md");
+  result = await sync.once(); assert.equal(result.status, "synchronized");
+  assert.equal(owner.vault.read("nested/Case.md").toString(), "case synthetic");
+  assert.equal(owner.vault.readOptional("nested/case.md"), null);
+  assert.equal(owner.vault.fileIdentity("nested/case.md", "nested/Case.md"), null);
+  const afterCaseRename = writes;
+  result = await sync.once(); assert.equal(result.status, "synchronized"); assert.equal(writes, afterCaseRename);
+  assert.equal(owner.vault.read("nested/Case.md").toString(), "case synthetic");
+  // A remote directory move arrives as one path change per file; missing target
+  // parents are created and each path keeps its own version check.
+  await edit("folder/one.md", "one", "folder-one");
+  await edit("folder/two.md", "two", "folder-two");
+  result = await sync.once(); assert.equal(result.status, "synchronized");
+  for (const name of ["one.md", "two.md"]) {
+    files.set(`moved-folder/${name}`, files.get(`folder/${name}`));
+    files.delete(`folder/${name}`); deleted.add(`folder/${name}`);
+  }
+  result = await sync.once(); assert.equal(result.status, "synchronized");
+  assert.equal(owner.vault.read("moved-folder/one.md").toString(), "one");
+  assert.equal(owner.vault.read("moved-folder/two.md").toString(), "two");
+  assert.equal(owner.vault.readOptional("folder/one.md"), null);
+  assert.equal(owner.vault.readOptional("folder/two.md"), null);
+  // A local rename against a concurrent remote modification keeps the remote
+  // version and publishes the moved bytes instead of overwriting either side.
+  await edit("rename-source.md", "rename base", "rename-vs-modify-base");
+  result = await sync.once(); assert.equal(result.status, "synchronized");
+  const renameVersion = files.get("rename-source.md");
+  owner.vault.createDirectories("rename-target");
+  assert.equal((await sync.requests.submit({ requestId: "rename-vs-modify", operation: "rename", path: "rename-source.md",
+    targetPath: "rename-target/moved.md", targetExpected: null, contentKind: "note",
+    expected: { sha256: renameVersion.sha256, size: renameVersion.size } })).status, "applied");
+  files.set("rename-source.md", await version("remote modified"));
+  const beforeRenameUpload = writes;
+  result = await sync.once(); assert.equal(result.status, "conflict");
+  assert.equal(owner.vault.read("rename-target/moved.md").toString(), "rename base");
+  assert.equal(snapshots.read(files.get("rename-target/moved.md")).toString(), "rename base");
+  const renameConflict = allRecords(state, "conflict").map(value => value.record).find(value => value.path === "rename-source.md");
+  assert.equal(renameConflict.local, null);
+  assert.equal(snapshots.read(renameConflict.remote).toString(), "remote modified");
+  assert.ok(writes > beforeRenameUpload);
+  // A remote rename onto a path that already holds different local content is a
+  // conflict; the occupied target is never deleted or overwritten first.
+  await edit("collision-target.md", "local target", "collision-target-local");
+  files.set("collision-target.md", await version("remote renamed"));
+  deleted.add("collision-source.md");
+  const beforeCollisionWrites = writes;
+  result = await sync.once(); assert.equal(result.status, "conflict");
+  assert.equal(owner.vault.read("collision-target.md").toString(), "local target");
+  assert.equal(writes, beforeCollisionWrites);
+  const collision = allRecords(state, "conflict").map(value => value.record).find(value => value.path === "collision-target.md");
+  assert.equal(snapshots.read(collision.local).toString(), "local target");
+  assert.equal(snapshots.read(collision.remote).toString(), "remote renamed");
+  console.log("reconcile.test.mjs: bidirectional cycles, restart, history, rename, offline ordering, case rename, directory move, target collision and retained conflicts passed");
 }
 finally { state?.close(); owner?.close(); await rm(root, { recursive: true, force: true }); }

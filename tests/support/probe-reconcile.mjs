@@ -49,6 +49,11 @@ export async function probeReconcile({ endpoint, token, onStage, withContainer =
           targetExpected: null, contentKind: suffix === "md" ? "note" : "file", expected: { sha256: fullDigest(bytes), size: bytes.length } })).status, "applied");
         await cycle(a, "rename-source"); await cycle(b, "rename-receiver");
         assert.equal(b.owner.vault.readOptional(source), null); assert.deepEqual(b.owner.vault.read(target), bytes);
+        const caseTarget = `nested/Renamed.${suffix}`;
+        assert.equal((await b.sync.requests.submit({ requestId: `case-${suffix}`, operation: "rename", path: target, targetPath: caseTarget,
+          targetExpected: null, contentKind: suffix === "md" ? "note" : "file", expected: { sha256: fullDigest(bytes), size: bytes.length } })).status, "applied");
+        await cycle(b, "case-rename-source"); await cycle(a, "case-rename-receiver");
+        assert.equal(a.owner.vault.fileIdentity(target, caseTarget), null); assert.deepEqual(a.owner.vault.read(caseTarget), bytes);
         results.push({ rename: true, kind: suffix === "md" ? "note" : "file", fullReadback: true });
       }
     }

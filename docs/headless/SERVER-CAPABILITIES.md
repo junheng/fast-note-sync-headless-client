@@ -137,7 +137,7 @@ node scripts/probe-server-capabilities.mjs --identity-only
 | 附件上传 | `FileUploadCheck` / 上传会话 / `FileUploadAck` | 合成夹具的正常 WS 分片上传及 Ack 已实际执行；同哈希异内容不进入上传，可靠上传重试和 Ack 丢失仍未验证 |
 | 完整附件下载 | REST 可读取完整字节；ETag 使用数据库中的协议 contentHash | 独立 Node WS 分片与完整字节、重启重拉已通过；并发时服务端不可变版本保证仍未知 |
 | 删除 | `FileDeleteRequest` 只有 Vault、路径、路径哈希、context；`fileService.Delete` 读取后直接标记删除 | 笔记已实测旧删除意图可删除其后已确认的新编辑；附件/目录竞态尚未验证，不能把客户端预读当作条件删除 |
-| 重命名 | 笔记目标占用检查及已删除记录复用分支 | 已占用目标 code 431 且无 context；来源更新后仍可重命名，来源/目标原子保护未证明 |
+| 重命名 | 笔记目标占用检查及已删除记录复用分支 | 已占用目标 code 431 且无 context；来源更新后仍可重命名，来源/目标原子保护未证明；跨目录与大小写重命名已实际收敛，见下节 |
 | 分页、批次与 End | DTO 和路由存在 batch/page/Ack 支持 | 笔记 4 页/附件 2 页真实接收通过；提前 End、重复/乱序及持久化失败有故障注入覆盖，目录批次仍未知 |
 | 删除历史 | 参考配置软删除保留为 90 天 | 历史过期、缺失记录及离线删除尚未验证 |
 | 主体 / Vault / 服务身份 | 用户响应有 UID，Vault 列表有 ID，版本接口有软件版本 | 同主体换令牌稳定性已验证；服务身份、重建 Vault 和服务升级恢复仍未证明，版本号不是服务身份 |
@@ -161,3 +161,14 @@ node scripts/probe-server-capabilities.mjs --identity-only
 `node scripts/probe-server-capabilities.mjs --headless-write` 及附加 `--server-version=3.5.1` 均退出 0。两种固定原版服务镜像分别验证 JSON/protobuf × 笔记/附件的创建、修改、跨目录重命名、删除、完整内容读回与状态重开。调用实际 `uploadOperation`、不可变 outbox 和共享协议实现，不使用虚构 CAS 能力，不修改官方服务端。
 
 该结果证明发送组件和原版服务互通；不等于完整双向调度、常驻入口或 Hermes 业务验收完成。已知并发限制仍如本页记录。
+
+## 2026-09-17：重命名与大小写路径矩阵
+
+```sh
+node scripts/probe-server-capabilities.mjs --rename-sync
+node scripts/probe-server-capabilities.mjs --rename-sync --server-version=3.5.1
+```
+
+两种固定原版镜像均退出 0。探针自己创建临时实例和合成账户，不接收外部端点或凭据，除既有双向修改、离线删除、重启与幂等空同步外，新增跨目录重命名和**大小写重命名**：一端把 `nested/renamed.{md,bin}` 改为 `nested/Renamed.{md,bin}` 后，另一端在同一路径组内先落地来源删除、再创建目标，随后稳定轮次不再产生变化，旧名称经完整版本读回确认不存在。
+
+该端点行为与源码一致：官方重命名消息仍是“来源删除 + 目标创建”两条路径变化，服务端不提供来源版本的原子条件。客户端据此按路径版本复核，并拒绝把大小写变体在本地当作可同时存在的两个名称。本探针不覆盖目录（`FolderSync*`）消息、空目录传播和目录重命名，这些仍未实现；也不证明来源/目标原子保护。
