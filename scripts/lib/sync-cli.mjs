@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fnsCredentials } from "./fns-credentials.mjs";
 import { runInitialCopy } from "./initial-copy.mjs";
+import { MAX_DAEMON_FAILURES, retryDelayMs, retryable } from "./retry-policy.mjs";
 import { openSyncRuntime } from "../../src/headless/runtime.ts";
 import { sendControl } from "../../src/headless/control.ts";
 import { OwnedDirectories } from "../../src/headless/filesystem.ts";
@@ -88,10 +89,10 @@ export async function runSyncCli({ args = process.argv.slice(2), env = process.e
         const receipt = await runtime.sync.once(controller.signal); output({ ...receipt, scope: "bidirectional-files", remoteAtomicConditions: "upstream", fullSamplingAudit: "not-performed" }); failures = 0;
         if (command === "once") { if (receipt.status !== "synchronized") process.exitCode = 2; break; }
       } catch (error) {
-        if (command === "once" || controller.signal.aborted || ++failures >= 8 || ["state-identity-mismatch", "state-corrupt", "state-format-unsupported"].includes(error.code)) throw error;
+        if (command === "once" || controller.signal.aborted || ++failures >= MAX_DAEMON_FAILURES || !retryable(error.code)) throw error;
         output({ schemaVersion: 1, status: "incomplete", code: codes.has(error.code) ? error.code : "sync-failed", retry: failures });
       }
-      await pause(Math.min(60000, interval * 2 ** failures), controller.signal);
+      await pause(retryDelayMs(failures, interval), controller.signal);
     } while (!controller.signal.aborted);
     if (controller.signal.aborted) process.exitCode = 130;
   } catch (error) {

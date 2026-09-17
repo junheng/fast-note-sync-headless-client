@@ -4,6 +4,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fnsCredentials } from "../scripts/lib/fns-credentials.mjs";
+import { FATAL_DAEMON_CODES, MAX_DAEMON_FAILURES, MAX_RETRY_DELAY_MS, retryDelayMs, retryable } from "../scripts/lib/retry-policy.mjs";
 import { DatabaseSync } from "node:sqlite";
 
 execFileSync(process.execPath, ["scripts/build-headless.mjs"], { stdio: "pipe" });
@@ -46,5 +47,20 @@ try {
   const unsupported = cli(["once"], { ...config, FNS_LOCAL_WRITER_MODE: "controlled" });
   assert.equal(unsupported.status, 2); assert.equal(JSON.parse(unsupported.stdout).code, "state-format-unsupported");
   assert.deepEqual(fs.readFileSync(database), original); assert.deepEqual(fs.readdirSync(config.FNS_VAULT_DIR), []);
-  console.log("headless-cli.test.mjs: standalone bundle, token/JSON files, config rejection, no side effects and output privacy passed");
+  // Offline status, missing owner and malformed input stay machine-readable and
+  // never exit 0; a failure is never reported as a completed synchronization.
+  const offline = cli(["status"], config);
+  assert.equal(offline.status, 2); assert.equal(JSON.parse(offline.stdout).code, "state-format-unsupported");
+  const noOwner = cli(["conflicts"], config);
+  assert.equal(noOwner.status, 2); assert.equal(JSON.parse(noOwner.stdout).code, "control-unavailable");
+  const badRequest = cli(["local-write"], config);
+  assert.equal(badRequest.status, 2); assert.equal(JSON.parse(badRequest.stdout).code, "invalid-config");
+  // Bounded reconnect: eight attempts with a capped delay, identity/state
+  // failures are fatal instead of retried forever.
+  assert.equal(MAX_DAEMON_FAILURES, 8); assert.equal(MAX_RETRY_DELAY_MS, 60000);
+  assert.deepEqual([1, 2, 3, 4, 5, 6, 7].map(n => retryDelayMs(n, 1000)), [2000, 4000, 8000, 16000, 32000, 60000, 60000]);
+  assert.deepEqual(FATAL_DAEMON_CODES, ["state-identity-mismatch", "state-corrupt", "state-format-unsupported"]);
+  for (const code of ["remote-read-failed", "connection-timeout", "upload-timeout"]) assert.equal(retryable(code), true);
+  for (const code of FATAL_DAEMON_CODES) assert.equal(retryable(code), false);
+  console.log("headless-cli.test.mjs: standalone bundle, token/JSON files, config rejection, exit codes, bounded retry policy, no side effects and output privacy passed");
 } finally { fs.rmSync(root, { recursive: true, force: true }); }

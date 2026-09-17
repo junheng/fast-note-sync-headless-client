@@ -1,5 +1,18 @@
 # 基线验证记录
 
+## 2026-09-17：运行入口、有界重连与只读里程碑
+
+任务 7.1、7.2、3.6：
+
+- **入口与退出码**：`once`（一次性双向）、`daemon`（常驻加控制 socket）、`status`、`local-write` 与冲突查询/决策子命令都输出 JSON；退出码 0 仅用于完成，冲突/不完整/错误为 2，取消为 130。`test:cli` 新增断言：离线 `status` 遇到未知状态格式返回 `state-format-unsupported` 且退出 2，无所有者时 `conflicts` 返回 `control-unavailable` 且退出 2，非法 `local-write` 输入返回 `invalid-config` 且退出 2。已知身份错配与认证主体无法验证由 `test:sync` 的 runtime-identity 用例保证拒绝恢复，并保留原文件与数据库。
+- **不误报成功**：`once` 只在 `status === "synchronized"` 时退出 0，否则退出 2；`daemon` 每次循环输出 `scope: bidirectional-files`、`remoteAtomicConditions: upstream`、`fullSamplingAudit: not-performed`，不把未执行的采样审计或未确认操作显示为完成。
+- **有界重连**：新增 `scripts/lib/retry-policy.mjs` 固定 daemon 策略——最多 8 次重试、退避 `interval × 2^n`、上限 60 秒，`state-identity-mismatch` / `state-corrupt` / `state-format-unsupported` 立即失败不重试；`test:cli` 断言退避序列（2/4/8/16/32/60/60 秒）、上限与致命码集合。
+- **取消与优雅退出**：SIGINT/SIGTERM 触发取消，关闭控制 socket、提交可恢复状态、释放 Vault 与状态目录所有权并以 130 退出。固定服务端 `--rename-sync` 用例断言 SIGTERM 后 `code 130`、重启 `once` 恢复 pending 并成功、第二进程得到 `ownership-conflict`、普通输出不含令牌/端点/路径。
+- **只读里程碑（3.6）**：固定镜像 3.6.1（`sha256:15833f15…`）的 `--note-pull` 与 `--file-pull` 在本次提交上重跑退出码 0。JSON 与 protobuf 各覆盖 7 篇笔记 4 页、3 个附件 2 页（含空文件与 12582913 字节附件），完整 SHA-256 清单一致，幂等重复、首次接入冲突保留、进程终止后重启恢复均通过，并断言未加载 Obsidian runtime。插件 build/lint 与继承测试通过，实际 Obsidian 1.12.7 的加载回执（插件 2.4.0、Vault 与 user-data 目录匹配）保留为宿主兼容证据，`REUSE.md` 已更新实际抽取点。
+- **披露（按用户边界不修上游问题）**：真实知识库只读副本在 1223 篇笔记后停在一个 3803076 字节附件——WS 与独立 HTTP 下载字节一致，但都不匹配服务端存储的协议哈希。该现象属于上游/服务端数据一致性问题，本仓库不修改服务端，也不放宽客户端校验；回执保持 `incomplete` 并作为继承限制披露，不作为只读里程碑的通过条件。另有真实库 660 MB 附件集合超出当前每集合 256 MiB 上限的容量配置待办。
+
+OpenSpec 更新为 **46/50**。
+
 ## 2026-09-17：固定服务端能力矩阵收尾
 
 任务 1.6：`SERVER-CAPABILITIES.md` 的能力矩阵补齐删除历史运行证据（离线删除按回收站历史证据传播，`--rename-sync` 的离线删除与重启用例），并把“任务 1.6 与 1.8 未完成”的过期结论改为矩阵自身状态说明。条件写与来源原子性仍以 `--write-preconditions` 实测结果为准（旧基线修改返回 530、已占用目标重命名返回 431、删除与重命名请求不含预期版本），历史保留期到期、目录批次与独立服务身份保留为明确未知项。矩阵只记录证据与未知，不构成完整兼容声明。OpenSpec 更新为 **43/50**。
