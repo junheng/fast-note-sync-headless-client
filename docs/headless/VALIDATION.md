@@ -106,6 +106,16 @@
 
 镜像首次构建暴露遗漏上游已有 `pnpm-workspace.yaml` 导致安装脚本许可缺失，现已将该文件纳入构建上下文并原样使用。Node 镜像固定版本及摘要，pnpm 11.1.2 冻结安装通过，原锁文件未改变。`.dockerignore` 采用构建输入白名单，本机 `.local/` 凭据及运行数据不进入 Git 或镜像。
 
+## Gitea 自动发布验证（2026-09-17）
+
+私有构建仓库 `diomgis/fast-note-sync-headless-client` 已创建，新增本地 `gitea` remote。推送提交 `52cf3a50acad5f7ab29d6d3ab8d70774b08328d6` 自动触发 [Gitea Actions run 26](https://g1t.sigmoid.cc:53691/diomgis/fast-note-sync-headless-client/actions/runs/26)，API 确认任务结果为 `success`。使用本仓库专属的 `mac-mini-fns-headless` runner，复用现有 Colima Docker，未部署同步业务服务。
+
+发布镜像为 `g1t.sigmoid.cc:53691/diomgis/fast-note-sync-headless-client@sha256:bf6624fa24bf9fe1aa1aa48a529dfac7e5543fb8aaf7bf2b674336d79ecdefe7`。流水线按该摘要拉取，验证架构 `arm64`、源码 revision 与提交一致，并在只读、非 root 容器中成功运行 CLI 帮助；镜像包已关联本仓库。独立查询 registry manifest 也确认该摘要和 Linux ARM64 子镜像。
+
+接入中修复两项实际故障：macOS 无交互 runner 无法向 Keychain 写入 Docker 登录凭据，改为受限权限临时认证配置并在退出时清理；原 Node 固定摘要仅对应 AMD64，改为同版本多架构索引摘要，使 ARM64 原生构建通过。索引中的 AMD64 子摘要与此前本地验证的基础镜像相同。工作流 YAML、内嵌 shell 语法、Compose 自定义镜像引用及 `git diff --check` 均通过。
+
+此项证明源码推送、自动构建、镜像发布与启动的交付链路可用。发布内容仍为一次性只读拉取预览版，ARM64 上未据此宣称完整协议回归、双向同步或 Hermes 业务验收通过。
+
 ## 历史：准备阶段的开发分支快照
 
 <!-- 后续历史记录保持原验证时点，不代表当前实现状态。 -->

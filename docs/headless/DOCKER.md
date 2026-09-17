@@ -90,7 +90,7 @@ docker compose --env-file .local/compose.env run --rm --no-build fns-headless
 
 其余上游、目标目录和令牌文件配置与前文相同。AMD64 使用方目前需从 Dockerfile 本地构建；不能把 ARM64 镜像当作已验证的原生 AMD64 交付物。
 
-`.dockerignore` 只允许构建输入进入上下文，`.local/`、`.env`、Git 历史、测试数据和笔记不会进入镜像。Node 基础镜像固定为 24.14.0 及摘要，pnpm 固定为 11.1.2，依赖使用冻结锁文件。构建同时复制上游已有的 `pnpm-workspace.yaml` 安装脚本许可配置，不依赖开发机的全局设置；配置方式见 [pnpm 11 说明](https://github.com/pnpm/pnpm.io/blob/main/blog/releases/11.0.md)。
+`.dockerignore` 只允许构建输入进入上下文，`.local/`、`.env`、Git 历史、测试数据和笔记不会进入镜像。Node 基础镜像固定为 24.14.0 及多架构索引摘要（自动选择 AMD64/ARM64 子镜像），pnpm 固定为 11.1.2，依赖使用冻结锁文件。构建同时复制上游已有的 `pnpm-workspace.yaml` 安装脚本许可配置，不依赖开发机的全局设置；配置方式见 [pnpm 11 说明](https://github.com/pnpm/pnpm.io/blob/main/blog/releases/11.0.md)。
 
 ## 可重复验证
 
