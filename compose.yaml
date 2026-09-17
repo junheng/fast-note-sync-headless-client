@@ -1,6 +1,6 @@
 services:
   fns-headless:
-    image: fast-note-sync-headless-client:local
+    image: ${FNS_IMAGE:-fast-note-sync-headless-client:local}
     build:
       context: .
       args:

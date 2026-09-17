@@ -1,0 +1,74 @@
+name: build-headless-image
+
+on:
+  push:
+    branches: [headless/stable-2.4.0]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: gitea.ref == 'refs/heads/headless/stable-2.4.0'
+    runs-on: personal-build
+    env:
+      DOCKER_HOST: unix:///Users/automation/.colima/cicd/docker.sock
+      REGISTRY_HOST: g1t.sigmoid.cc:53691
+      IMAGE_PATH: ${{ gitea.repository }}
+      COMMIT_SHA: ${{ gitea.sha }}
+      SOURCE_URL: ${{ gitea.server_url }}/${{ gitea.repository }}
+      BUILD_PROXY_URL: ${{ vars.BUILD_PROXY_URL }}
+      BUILD_NO_PROXY: ${{ vars.BUILD_NO_PROXY }}
+    steps:
+      - uses: https://github.com/actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build and publish ARM64 image
+        shell: bash
+        env:
+          REGISTRY_USERNAME: ${{ secrets.REGISTRY_USERNAME }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+        run: |
+          set +x
+          set -Eeuo pipefail
+          : "${REGISTRY_USERNAME:?Missing registry username secret}"
+          : "${REGISTRY_PASSWORD:?Missing registry password secret}"
+          umask 077
+          mkdir -p .local
+          chmod 0700 .local
+          DOCKER_CONFIG=$(mktemp -d "$PWD/.local/docker-auth.XXXXXX")
+          export DOCKER_CONFIG
+          trap 'rm -rf -- "$DOCKER_CONFIG"' EXIT
+          node <<'NODE'
+          const fs = require('node:fs');
+          const config = {};
+          if (process.env.BUILD_PROXY_URL) {
+            config.proxies = { default: {
+              httpProxy: process.env.BUILD_PROXY_URL,
+              httpsProxy: process.env.BUILD_PROXY_URL,
+              noProxy: process.env.BUILD_NO_PROXY || '',
+            }};
+          }
+          fs.writeFileSync(`${process.env.DOCKER_CONFIG}/config.json`,
+            JSON.stringify(config), { mode: 0o600 });
+          NODE
+          printf '%s' "$REGISTRY_PASSWORD" |
+            docker login "$REGISTRY_HOST" --username "$REGISTRY_USERNAME" --password-stdin
+          image="$REGISTRY_HOST/$(printf '%s' "$IMAGE_PATH" | tr '[:upper:]' '[:lower:]')"
+          docker buildx build --builder default \
+            --platform linux/arm64 \
+            --build-arg "VCS_REF=$COMMIT_SHA" \
+            --label "org.opencontainers.image.source=$SOURCE_URL" \
+            --label "org.opencontainers.image.revision=$COMMIT_SHA" \
+            --tag "$image:sha-$COMMIT_SHA" \
+            --metadata-file .local/image-metadata.json \
+            --push .
+          digest=$(node -p 'JSON.parse(require("node:fs").readFileSync(".local/image-metadata.json", "utf8"))["containerimage.digest"]')
+          [[ $digest =~ ^sha256:[a-f0-9]{64}$ ]]
+          docker pull "$image@$digest"
+          [[ $(docker image inspect "$image@$digest" --format '{{.Architecture}}') == arm64 ]]
+          [[ $(docker image inspect "$image@$digest" --format '{{index .Config.Labels "org.opencontainers.image.revision"}}') == "$COMMIT_SHA" ]]
+          docker run --rm --read-only --cap-drop=ALL \
+            --security-opt=no-new-privileges "$image@$digest" --help
+          printf 'Status: published\nImage: %s@%s\nCommit: %s\nPlatform: linux/arm64\n' "$image" "$digest" "$COMMIT_SHA"

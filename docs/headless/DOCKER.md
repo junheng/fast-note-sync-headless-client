@@ -62,7 +62,29 @@ docker run --rm --read-only --cap-drop=ALL \
 
 ## 交付给使用方
 
-本次交付 `Dockerfile`、`compose.yaml`、`compose.env.example`、本说明和精确源码提交；使用方可从固定提交构建镜像。本次不向镜像仓库发布、不部署业务服务。后续正式发布需补齐双向/恢复验收，再交付独立 Headless 版本号、不可变镜像摘要、兼容矩阵与回滚说明。Hermes Ops 负责部署、凭据挂载、权限和生产切换，本仓库负责客户端及其运行契约。
+本次交付 `Dockerfile`、`compose.yaml`、`compose.env.example`、本说明和精确源码提交；使用方可从固定提交构建镜像，也可使用 Gitea 自动构建的预览镜像。后续正式发布需补齐双向/恢复验收，再交付独立 Headless 版本号、兼容矩阵与回滚说明。Hermes Ops 负责部署、凭据挂载、权限和生产切换，本仓库负责客户端及其运行契约。
+
+### Gitea 自动构建
+
+构建仓库为 [diomgis/fast-note-sync-headless-client](https://g1t.sigmoid.cc:53691/diomgis/fast-note-sync-headless-client)，本地 remote 名称为 `gitea`。推送 `headless/stable-2.4.0` 分支触发 `.gitea/workflows/build-image.yaml`：
+
+```sh
+git push origin headless/stable-2.4.0
+git push gitea headless/stable-2.4.0
+```
+
+流水线复用 `personal-build` runner 的 Colima Docker，读取账号级 `REGISTRY_USERNAME`、`REGISTRY_PASSWORD` secrets 和 `BUILD_PROXY_URL`、`BUILD_NO_PROXY` variables。开发机的 `.local/gitea.env` 只用于仓库管理与推送，不进入镜像或工作流。CI 使用临时 Docker 认证目录并在退出时清理。
+
+当前发布架构为 **linux/arm64**。每次构建发布 `g1t.sigmoid.cc:53691/diomgis/fast-note-sync-headless-client:sha-<完整提交 SHA>`，随后按摘要拉取，检查架构和源码 revision，并在只读、非 root 容器内运行 CLI 帮助。成功日志提供 `Image: ...@sha256:...`；使用方应固定该摘要，不将可重新推送的标签当作不可变版本。该检查验证镜像交付，不替代同步协议验收。
+
+使用已发布镜像时，先通过 `docker login g1t.sigmoid.cc:53691` 使用自己的只读镜像凭据登录，将成功流水线输出的完整镜像摘要写入 `.local/compose.env` 的 `FNS_IMAGE`，再执行：
+
+```sh
+docker compose --env-file .local/compose.env pull fns-headless
+docker compose --env-file .local/compose.env run --rm --no-build fns-headless
+```
+
+其余上游、目标目录和令牌文件配置与前文相同。AMD64 使用方目前需从 Dockerfile 本地构建；不能把 ARM64 镜像当作已验证的原生 AMD64 交付物。
 
 `.dockerignore` 只允许构建输入进入上下文，`.local/`、`.env`、Git 历史、测试数据和笔记不会进入镜像。Node 基础镜像固定为 24.14.0 及摘要，pnpm 固定为 11.1.2，依赖使用冻结锁文件。构建同时复制上游已有的 `pnpm-workspace.yaml` 安装脚本许可配置，不依赖开发机的全局设置；配置方式见 [pnpm 11 说明](https://github.com/pnpm/pnpm.io/blob/main/blog/releases/11.0.md)。
 
