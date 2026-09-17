@@ -12,15 +12,16 @@ services:
       FNS_TOKEN_FILE: /run/secrets/fns_token
       FNS_VAULT_DIR: /vault
       FNS_STATE_DIR: /state
-      FNS_LOCAL_WRITER_MODE: exclusive
+      FNS_LOCAL_WRITER_MODE: ${FNS_LOCAL_WRITER_MODE:?Set controlled or exclusive local ownership}
+      FNS_SYNC_INTERVAL_MS: ${FNS_SYNC_INTERVAL_MS:-5000}
     volumes:
       - type: bind
-        source: ${FNS_LOCAL_VAULT:?Set an empty local directory}
+        source: ${FNS_LOCAL_VAULT:?Set the local vault directory}
         target: /vault
         bind:
           create_host_path: false
       - type: bind
-        source: ${FNS_LOCAL_STATE:?Set an empty state directory outside the Vault}
+        source: ${FNS_LOCAL_STATE:?Set the persistent state directory outside the Vault}
         target: /state
         bind:
           create_host_path: false

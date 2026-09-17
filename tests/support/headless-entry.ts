@@ -19,3 +19,5 @@ export * from "../../src/headless/identity";
 export * from "../../src/headless/outbox";
 export * from "../../src/headless/upload";
 export * from "../../src/headless/pull_collection";
+export * from "../../src/headless/remote";
+export * from "../../src/headless/reconcile";

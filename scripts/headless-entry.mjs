@@ -1,2 +1,2 @@
-import { runInitialCopy } from "./lib/initial-copy.mjs";
-void runInitialCopy();
+import { runSyncCli } from "./lib/sync-cli.mjs";
+void runSyncCli();

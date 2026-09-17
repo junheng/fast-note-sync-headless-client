@@ -1,7 +1,7 @@
 import type { OwnedDirectories } from "./filesystem";
 import type { StateStore } from "./state_store";
-import type { BindingRecord, RecordKind } from "./state_records";
-import { validIdentifier } from "./state_records";
+import type { BindingRecord } from "./state_records";
+import { validIdentifier, RECORD_KINDS } from "./state_records";
 
 export class IdentityError extends Error {
   constructor(public readonly code: "state-identity-mismatch" | "state-identity-unverified" | "invalid-config") {
@@ -54,8 +54,7 @@ export class IdentityBinding {
       if (prior.serviceId !== remote.serviceId || prior.subjectId !== remote.subjectId || prior.vaultId !== remote.vaultId) throw new IdentityError("state-identity-mismatch");
     } else {
       // In particular, do not adopt the unbound state of an initial-copy preview.
-      const kinds: RecordKind[] = ["binding", "operation", "baseline", "batch", "session", "application", "conflict", "local-request", "scan"];
-      if (kinds.some(kind => this.state.list(kind, { limit: 1 }).length)) throw new IdentityError("state-identity-unverified");
+      if (RECORD_KINDS.some(kind => this.state.list(kind, { limit: 1 }).length)) throw new IdentityError("state-identity-unverified");
       this.state.commit([{ type: "put", expectedRevision: null, record: {
         formatVersion: 1, kind: "binding", id: "identity", endpoint: this.endpoint,
         serviceId: remote.serviceId, subjectId: remote.subjectId, vaultId: remote.vaultId, vaultName: remote.vaultName,

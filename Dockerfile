@@ -18,11 +18,11 @@ COPY --from=build /build/dist/headless/cli.cjs ./cli.cjs
 COPY LICENSE ./LICENSE
 ARG VCS_REF=unknown
 LABEL org.opencontainers.image.title="Fast Note Sync Headless Client" \
-      org.opencontainers.image.description="Initial read-only copy preview; no bidirectional sync or resume" \
+      org.opencontainers.image.description="Node bidirectional file sync with durable state; based on the official stable plugin" \
       org.opencontainers.image.source="https://github.com/junheng/fast-note-sync-headless-client" \
       org.opencontainers.image.revision=$VCS_REF
 ENV NODE_ENV=production FNS_VAULT_DIR=/vault FNS_STATE_DIR=/state
 USER node
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["node", "/app/cli.cjs"]
-CMD ["pull"]
+CMD ["daemon"]

@@ -4,6 +4,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fnsCredentials } from "../scripts/lib/fns-credentials.mjs";
+import { DatabaseSync } from "node:sqlite";
 
 execFileSync(process.execPath, ["scripts/build-headless.mjs"], { stdio: "pipe" });
 const root = fs.mkdtempSync(path.join(tmpdir(), "fns-cli-test-"));
@@ -32,9 +33,18 @@ try {
   assert.equal(cli(["--help"]).status, 0);
   for (const args of [[], ["sync"], ["watch"], ["pull", "--unexpected"]]) assert.equal(cli(args).status, 2);
   const config = { FNS_CREDENTIALS_FILE: jsonFile, FNS_VAULT_DIR: path.join(root, "vault"), FNS_STATE_DIR: path.join(root, "state") };
-  const missingContract = cli(["pull"], config);
-  assert.equal(missingContract.status, 2);
-  assert.equal(JSON.parse(missingContract.stdout).code, "local-writer-contract-required");
+  for (const command of ["pull", "once", "daemon"]) {
+    const missingContract = cli([command], config);
+    assert.equal(missingContract.status, 2);
+    assert.equal(JSON.parse(missingContract.stdout).code, "local-writer-contract-required");
+  }
   assert.ok(!fs.existsSync(config.FNS_VAULT_DIR)); assert.ok(!fs.existsSync(config.FNS_STATE_DIR));
+  fs.mkdirSync(config.FNS_VAULT_DIR, { mode: 0o700 }); fs.mkdirSync(config.FNS_STATE_DIR, { mode: 0o700 });
+  const database = path.join(config.FNS_STATE_DIR, "state.db");
+  const db = new DatabaseSync(database); db.exec("PRAGMA user_version=999"); db.close();
+  const original = fs.readFileSync(database);
+  const unsupported = cli(["once"], { ...config, FNS_LOCAL_WRITER_MODE: "controlled" });
+  assert.equal(unsupported.status, 2); assert.equal(JSON.parse(unsupported.stdout).code, "state-format-unsupported");
+  assert.deepEqual(fs.readFileSync(database), original); assert.deepEqual(fs.readdirSync(config.FNS_VAULT_DIR), []);
   console.log("headless-cli.test.mjs: standalone bundle, token/JSON files, config rejection, no side effects and output privacy passed");
 } finally { fs.rmSync(root, { recursive: true, force: true }); }

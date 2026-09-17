@@ -1,5 +1,5 @@
 import { Buffer } from "node:buffer";
-import { chmodSync, lstatSync, unlinkSync } from "node:fs";
+import { chmodSync, lstatSync, unlinkSync, openSync, closeSync, fstatSync, constants } from "node:fs";
 import { createConnection, createServer } from "node:net";
 import type { Socket } from "node:net";
 import type { OwnedDirectories } from "./filesystem";
@@ -29,9 +29,22 @@ export function localControlHandler(requests: LocalRequests): (input: unknown) =
   };
 }
 
-async function liveSocket(file: string): Promise<boolean> {
-  return await new Promise((resolve, reject) => {
-    const socket = createConnection(file);
+// Linux sockaddr_un has a short pathname limit. Address the same filesystem
+// socket through an owned directory descriptor, also pinning its parent inode.
+function socketAddress(directory: string, expected?: { device: string; inode: string }): { path: string; close(): void } {
+  let fd: number | undefined;
+  try {
+    fd = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    const stat = fstatSync(fd, { bigint: true });
+    if ((stat.mode & BigInt(0o077)) !== BigInt(0) || stat.uid !== BigInt(process.getuid!())) throw new ControlError("control-permissions");
+    if (expected && (stat.dev.toString() !== expected.device || stat.ino.toString() !== expected.inode)) throw new ControlError("control-unavailable");
+    return { path: `/proc/self/fd/${fd}/control.sock`, close: () => { if (fd !== undefined) { closeSync(fd); fd = undefined; } } };
+  } catch (error) { if (fd !== undefined) closeSync(fd); throw error instanceof ControlError ? error : new ControlError("control-unavailable"); }
+}
+async function liveSocket(directory: string): Promise<boolean> {
+  const address = socketAddress(directory);
+  try { return await new Promise((resolve, reject) => {
+    const socket = createConnection(address.path);
     socket.setTimeout(1000);
     socket.once("connect", () => { socket.destroy(); resolve(true); });
     socket.once("timeout", () => { socket.destroy(); reject(new ControlError("control-unavailable")); });
@@ -39,7 +52,7 @@ async function liveSocket(file: string): Promise<boolean> {
       if (error.code === "ECONNREFUSED" || error.code === "ENOENT") resolve(false);
       else reject(new ControlError("control-unavailable"));
     });
-  });
+  }); } finally { address.close(); }
 }
 
 export async function startControl(owner: OwnedDirectories, handler: (request: unknown) => Promise<unknown>): Promise<{ close(): Promise<void> }> {
@@ -48,15 +61,16 @@ export async function startControl(owner: OwnedDirectories, handler: (request: u
   const permissions = lstatSync(directory);
   if ((permissions.mode & 0o077) !== 0 || permissions.uid !== process.getuid!()) throw new ControlError("control-permissions");
   const file = `${directory}/control.sock`;
-  if (Buffer.byteLength(file) > 100) throw new ControlError("control-limit");
   try {
     const entry = lstatSync(file);
-    if (!entry.isSocket() || entry.uid !== process.getuid!() || await liveSocket(file)) throw new ControlError("control-unavailable");
+    if (!entry.isSocket() || entry.uid !== process.getuid!() || await liveSocket(directory)) throw new ControlError("control-unavailable");
     unlinkSync(file);
   } catch (error) { if ((error as { code?: string }).code !== "ENOENT") throw error; }
   const clients = new Set<Socket>();
+  const pending = new Set<Promise<void>>();
+  let closing = false;
   const server = createServer(socket => {
-    if (clients.size >= MAX_CLIENTS) { socket.end('{"ok":false,"code":"control-limit"}\n'); return; }
+    if (closing || clients.size >= MAX_CLIENTS) { socket.end('{"ok":false,"code":"control-limit"}\n'); return; }
     clients.add(socket);
     const chunks: Buffer[] = [];
     let total = 0, handled = false;
@@ -64,7 +78,7 @@ export async function startControl(owner: OwnedDirectories, handler: (request: u
     socket.on("error", () => {});
     socket.on("close", () => clients.delete(socket));
     socket.on("data", (bytes: Buffer) => {
-      if (handled) { socket.destroy(); return; }
+      if (closing || handled) { socket.destroy(); return; }
       total += bytes.length;
       if (total > MAX_FRAME) { handled = true; socket.end('{"ok":false,"code":"control-limit"}\n'); return; }
       chunks.push(bytes);
@@ -74,7 +88,7 @@ export async function startControl(owner: OwnedDirectories, handler: (request: u
       const frame = Buffer.concat(chunks);
       if (frame.indexOf(10) !== frame.length - 1) { socket.end('{"ok":false,"code":"invalid-control-request"}\n'); return; }
       socket.setTimeout(0);
-      void (async () => {
+      const operation = (async () => {
         try {
           owner.vault.assertIdentity(); owner.state.assertIdentity();
           const input = JSON.parse(frame.subarray(0, -1).toString("utf8")) as unknown;
@@ -86,14 +100,25 @@ export async function startControl(owner: OwnedDirectories, handler: (request: u
           socket.end(JSON.stringify({ ok: false, code }) + "\n");
         }
       })();
+      pending.add(operation);
+      void operation.finally(() => pending.delete(operation));
     });
   });
-  await new Promise<void>((resolve, reject) => { server.once("error", () => reject(new ControlError("control-unavailable"))); server.listen(file, resolve); });
-  try { chmodSync(file, 0o600); }
-  catch { server.close(); throw new ControlError("control-permissions"); }
+  const address = socketAddress(directory, owner.state.identity);
+  try {
+    owner.state.assertIdentity();
+    await new Promise<void>((resolve, reject) => { server.once("error", () => reject(new ControlError("control-unavailable"))); server.listen(address.path, resolve); });
+    chmodSync(address.path, 0o600);
+    owner.state.assertIdentity();
+  } catch { server.close(); address.close(); throw new ControlError("control-unavailable"); }
   return {
     close: async () => {
-      await new Promise<void>((resolve, reject) => server.close(error => error ? reject(new ControlError("control-unavailable")) : resolve()));
+      closing = true;
+      const stopped = new Promise<void>((resolve, reject) => server.close(error => error ? reject(new ControlError("control-unavailable")) : resolve()));
+      // An idle or non-reading client must not hold the owner lock forever.
+      // Already accepted mutations still finish before state can be closed.
+      for (const socket of clients) socket.destroy();
+      try { await Promise.all([...pending, stopped]); } finally { address.close(); }
     },
   };
 }
@@ -102,8 +127,9 @@ export async function sendControl(stateDirectory: string, request: unknown): Pro
   let body: string;
   try { body = JSON.stringify(request) + "\n"; } catch { throw new ControlError("invalid-control-request"); }
   if (Buffer.byteLength(body) > MAX_FRAME) throw new ControlError("control-limit");
-  return await new Promise((resolve, reject) => {
-    const socket = createConnection(`${stateDirectory}/control.sock`);
+  const address = socketAddress(stateDirectory);
+  try { return await new Promise((resolve, reject) => {
+    const socket = createConnection(address.path);
     const chunks: Buffer[] = [];
     let total = 0;
     socket.setTimeout(30000, () => { socket.destroy(); reject(new ControlError("control-timeout")); });
@@ -119,5 +145,5 @@ export async function sendControl(stateDirectory: string, request: unknown): Pro
       try { resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown); }
       catch { reject(new ControlError("control-unavailable")); }
     });
-  });
+  }); } finally { address.close(); }
 }

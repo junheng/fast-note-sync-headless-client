@@ -4,6 +4,7 @@ import { probeContainerPull } from "../tests/support/probe-container-pull.mjs";
 import { loadBundle } from "../tests/support/load-bundle.mjs";
 import { probeWritePreconditions } from "../tests/support/probe-write-preconditions.mjs";
 import { probeHeadlessWrite } from "../tests/support/probe-headless-write.mjs";
+import { probeReconcile } from "../tests/support/probe-reconcile.mjs";
 import * as protocolHash from "../src/lib/utils/protocol_hash.ts";
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
@@ -141,6 +142,9 @@ try {
   } else if (process.argv.includes("--note-pull")) {
     const results = await probeNotePull({ endpoint: base, token, request, onStage: value => { stage = `note-pull-${value}`; }, onObserved: value => observed.push(value) });
     console.log(JSON.stringify({ serverVersion, image, results }));
+  } else if (process.argv.includes("--reconcile") || process.argv.includes("--container-sync")) {
+    const results = await probeReconcile({ endpoint: base, token, withContainer: process.argv.includes("--container-sync"), onStage: value => { stage = `reconcile-${value}`; } });
+    console.log(JSON.stringify({ schemaVersion: 1, serverVersion, scope: "headless-reconciliation", results }));
   } else if (process.argv.includes("--headless-write")) {
     const results = await probeHeadlessWrite({ endpoint: base, token, request, onStage: value => { stage = `headless-write-${value}`; } });
     console.log(JSON.stringify({ serverVersion, image, results, upstreamConcurrencySemantics: true }));
@@ -274,6 +278,7 @@ try {
 } catch (error) {
   // Avoid printing response bodies, credentials, container logs or private paths.
   console.error(`Capability probe failed at ${stage}: ${error instanceof assert.AssertionError ? error.message : "operation failed"}`);
+  if (typeof error?.code === "string" && /^[a-z-]{1,60}$/.test(error.code)) console.error(JSON.stringify({ code: error.code }));
   console.error(JSON.stringify({ observed: observed.slice(-10) }));
   process.exitCode = 1;
 } finally {

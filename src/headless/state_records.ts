@@ -107,13 +107,28 @@ export interface ScanRecord extends RecordHeader {
   byteCount: number;
 }
 
-export type StateRecord = BindingRecord | OperationRecord | BaselineRecord | BatchRecord | SessionRecord | ApplicationRecord | ConflictRecord | LocalRequestRecord | ScanRecord;
+export interface ReconciliationRecord extends RecordHeader {
+  kind: "reconcile";
+  path: string;
+  before: FileVersion | null;
+  after: FileVersion | null;
+  status: "prepared" | "committed" | "diverged";
+}
+export interface CycleRecord extends RecordHeader {
+  kind: "cycle";
+  completedAt: number;
+  noteTime: number;
+  fileTime: number;
+  fileCount: number;
+}
+export type StateRecord = BindingRecord | OperationRecord | BaselineRecord | BatchRecord | SessionRecord | ApplicationRecord | ConflictRecord | LocalRequestRecord | ScanRecord | ReconciliationRecord | CycleRecord;
 export type RecordKind = StateRecord["kind"];
 
 const digestPattern = /^[a-f0-9]{64}$/;
 const identifierPattern = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 export const validIdentifier = (value: unknown): value is string => typeof value === "string" && identifierPattern.test(value);
-export const validRecordKind = (value: unknown): value is RecordKind => ["binding", "operation", "baseline", "batch", "session", "application", "conflict", "local-request", "scan"].includes(value as string);
+export const RECORD_KINDS: RecordKind[] = ["binding", "operation", "baseline", "batch", "session", "application", "conflict", "local-request", "scan", "reconcile", "cycle"];
+export const validRecordKind = (value: unknown): value is RecordKind => RECORD_KINDS.includes(value as RecordKind);
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 
@@ -142,6 +157,13 @@ export function validStateRecord(value: unknown): value is StateRecord {
   if (!object(value) || value.formatVersion !== 1 || !validIdentifier(value.id) || !validRecordKind(value.kind)) return false;
   const header = ["formatVersion", "id", "kind"];
   switch (value.kind) {
+    case "reconcile":
+      return fields(value, [...header, "path", "before", "after", "status"]) && validRelativePath(value.path) &&
+        validFileVersion(value.before) && validFileVersion(value.after) && (value.before !== null || value.after !== null) &&
+        ["prepared", "committed", "diverged"].includes(value.status as string);
+    case "cycle":
+      return fields(value, [...header, "completedAt", "noteTime", "fileTime", "fileCount"]) && value.id === "latest" &&
+        integer(value.completedAt) && integer(value.noteTime) && integer(value.fileTime) && integer(value.fileCount) && value.fileCount <= 10000;
     case "binding":
       return fields(value, [...header, "endpoint", "serviceId", "subjectId", "vaultId", "vaultName", "directory"]) &&
         value.id === "identity" && typeof value.endpoint === "string" && value.endpoint.length <= 4096 &&

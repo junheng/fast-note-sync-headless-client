@@ -48,21 +48,28 @@ export class DurableOutbox {
 
   async prepare(path: string, desiredInput: FileVersion | null, remoteInput: FileVersion | null,
     action: OperationRecord["action"] = desiredInput === null ? "delete" : remoteInput === null ? "create" : "modify",
-    targetPath: string | null = null): Promise<OperationRecord> {
+    targetPath: string | null = null, operationId?: string): Promise<OperationRecord> {
     if (!validSyncPath(path) || !validFileVersion(desiredInput) || !validFileVersion(remoteInput) ||
         !["create", "modify", "delete", "rename"].includes(action) || (action === "delete") !== (desiredInput === null) ||
         (action === "rename" ? !validSyncPath(targetPath) || targetPath === path || !remoteInput || !sameVersion(desiredInput, remoteInput) ||
           path.endsWith(".md") !== targetPath.endsWith(".md") : targetPath !== null)) throw new OutboxError("invalid-operation");
+    if (operationId !== undefined && !validIdentifier(operationId)) throw new OutboxError("invalid-operation");
     const desired = desiredInput ? { ...desiredInput } : null, expectedRemote = remoteInput ? { ...remoteInput } : null;
     return await this.owner.exclusive(async () => {
       this.identity.assertVerified();
       if (desired) this.snapshots.read(desired);
       if (expectedRemote) this.snapshots.read(expectedRemote);
       const existing = this.operations();
+      const identified = operationId ? existing.find(op => op.id === operationId) : undefined;
+      if (identified) {
+        if (identified.path !== path || identified.action !== action || identified.targetPath !== targetPath ||
+            !sameVersion(identified.desired, desired) || !sameVersion(identified.expectedRemote, expectedRemote)) throw new OutboxError("invalid-operation");
+        return identified;
+      }
       const prior = existing.filter(op => op.path === path && op.status !== "acknowledged").at(-1);
-      if (prior && sameVersion(prior.desired, desired) && sameVersion(prior.expectedRemote, expectedRemote) && prior.action === action && prior.targetPath === targetPath) return prior;
+      if (!operationId && prior && sameVersion(prior.desired, desired) && sameVersion(prior.expectedRemote, expectedRemote) && prior.action === action && prior.targetPath === targetPath) return prior;
       if (existing.length >= 10000) throw new OutboxError("operation-limit");
-      const record: OperationRecord = { formatVersion: 1, kind: "operation", id: randomUUID(), path, action, targetPath,
+      const record: OperationRecord = { formatVersion: 1, kind: "operation", id: operationId ?? randomUUID(), path, action, targetPath,
         status: "pending", base: this.baseline(path)?.version ?? null, desired, expectedRemote,
         sessionId: null, context: randomUUID(), sequence: (existing.at(-1)?.sequence ?? 0) + 1 };
       this.state.commit([{ type: "put", expectedRevision: null, record }]);

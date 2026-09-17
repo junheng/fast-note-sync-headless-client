@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { fork } from "node:child_process";
+import { createConnection } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { loadBundle } from "./support/load-bundle.mjs";
 const { exports: { OwnedDirectories, StateStore, LocalRequests, fullDigest, startControl, localControlHandler, sendControl, startLocalRuntime } } = await loadBundle("tests/support/headless-entry.ts");
@@ -121,6 +122,12 @@ try {
       await assert.rejects(startControl(owner, localControlHandler(requests)), e => e.code === "control-unavailable");
       const invalid = await sendControl(f.state, { secret: "synthetic-content-must-not-leak" });
       assert.deepEqual(invalid, { ok: false, code: "invalid-control-request" });
+      const idle = createConnection(path.join(f.state, "control.sock"));
+      await new Promise(resolve => idle.once("connect", resolve));
+      let timer;
+      try { await Promise.race([control.close(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("idle-client-shutdown-timeout")), 1000); })]); }
+      finally { clearTimeout(timer); idle.destroy(); }
+      control = undefined;
     } finally { await control?.close(); store.close(); owner.close(); }
   }
   console.log("local-control.test.mjs: independent Bot processes, deterministic publication barriers, 12 kill/retry cases and socket permissions passed");

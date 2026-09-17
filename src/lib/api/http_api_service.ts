@@ -1,3 +1,4 @@
+import { contentListRoute } from "../sync/content_routes";
 
 
 import { requestUrl } from "obsidian";
@@ -493,18 +494,7 @@ export class HttpApiService {
      * 获取笔记列表（支持回收站模式）
      */
     async getNoteList(page = 1, pageSize = 20, isRecycle = false, keyword = "", signal?: AbortSignal): Promise<NoteListResponse> {
-        const params = new URLSearchParams({
-            vault: this.plugin.settings.vault,
-            page: page.toString(),
-            pageSize: pageSize.toString(),
-            isRecycle: isRecycle ? "true" : "false"
-        });
-
-        if (keyword) {
-            params.append("keyword", keyword);
-        }
-
-        const endpoint = `/api/notes?${params.toString()}`;
+        const endpoint = contentListRoute("notes", this.plugin.settings.vault, page, pageSize, isRecycle, keyword);
 
         const { status, json } = await this.request(endpoint, {
             method: "GET",
@@ -527,18 +517,7 @@ export class HttpApiService {
      * 获取文件列表（支持回收站模式）
      */
     async getFileList(page = 1, pageSize = 20, isRecycle = false, keyword = "", signal?: AbortSignal): Promise<FileListResponse> {
-        const params = new URLSearchParams({
-            vault: this.plugin.settings.vault,
-            page: page.toString(),
-            pageSize: pageSize.toString(),
-            isRecycle: isRecycle ? "true" : "false"
-        });
-
-        if (keyword) {
-            params.append("keyword", keyword);
-        }
-
-        const endpoint = `/api/files?${params.toString()}`;
+        const endpoint = contentListRoute("files", this.plugin.settings.vault, page, pageSize, isRecycle, keyword);
 
         const { status, json } = await this.request(endpoint, {
             method: "GET",

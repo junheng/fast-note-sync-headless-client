@@ -42,6 +42,14 @@ export default defineConfig([
     },
   },
   {
+    files: ["src/headless/remote.ts"],
+    rules: {
+      // This Node-only HTTP adapter must use native fetch. The inherited rule
+      // recommends Obsidian requestUrl, which cannot run in this host.
+      "no-restricted-globals": "off",
+    },
+  },
+  {
     files: ["src/headless/**/*.ts"],
     rules: {
       // This entry is a Node process; mobile restrictions still apply to every

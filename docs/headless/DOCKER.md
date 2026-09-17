@@ -1,68 +1,66 @@
 # Docker 交付与运行
 
-当前可交付的是**一次性只读拉取预览版**：无需 Obsidian，可将指定上游 Vault 的笔记和附件下载到指定宿主机目录。镜像内只有独立 Node 入口和运行依赖，启动时不编译、不安装 npm 包，也不加载测试代码。
+当前源码提供独立 Node 双向文件同步：`once` 执行一轮，`daemon` 常驻核对，重启使用同一份持久状态继续。Docker 默认运行 `daemon`，不依赖 Obsidian。笔记及附件的双向修改、离线删除、受控重命名和冲突保留已接入；冲突决策入口和完整目录操作尚待完成，因此尚未宣称完整 MVP 验收通过。
 
-尚不支持双向写入、常驻同步或恢复已有状态；这次 Docker 交付不代表完整 MVP 已验收。目标笔记目录和状态目录都必须为空，使用方需确保运行期间没有其他程序修改它们。退出后可以使用已下载文件；失败时保留部分内容和状态，不自动清空或覆盖旧目录。
+历史发布的只读预览镜像不会自动获得这些功能。使用本次源码构建，或固定后续成功流水线发布的源码 revision 和镜像摘要；不要继续使用旧只读摘要来验收双向。
 
-## 构建与 Compose
-
-在仓库根目录执行：
+## 构建和启动
 
 ```sh
-docker build -t fast-note-sync-headless-client:local \
-  --build-arg VCS_REF="$(git rev-parse HEAD)" .
+docker build -t fast-note-sync-headless-client:local .
 mkdir -p .local
 cp -n compose.env.example .local/compose.env
 ```
 
-编辑 `.local/compose.env`：填写上游 URL、远端 Vault 名称、两处宿主机绝对目录、令牌文件绝对路径及运行用户 UID/GID。令牌文件只存 token，权限设为 `0600`，并让指定 UID 可读。笔记和状态目录需提前创建、对该 UID 可写；状态目录权限必须为 `0700`，且位于笔记目录之外。Linux 本地文件系统为当前支持范围，不使用 NFS、SMB 或 Windows 共享目录。
+编辑 `.local/compose.env`，配置上游、远端 Vault、宿主机笔记及状态目录、token 文件路径、UID/GID。token 文件只存令牌，权限 `0600`；状态目录权限 `0700`。目录需提前创建，对容器 UID 可读写，且位于 Linux 本地文件系统。状态目录必须在笔记目录之外。运行中保留笔记目录和状态目录的路径及 inode。
+
+首次接入可以有本地内容；同路径内容不同时保留双方，记录冲突。旧 `pull` 预览状态没有身份绑定，不能直接升级复用；保留旧数据，另建状态和验收目录，验证后由 Ops 安排切换。禁止删除状态后把旧文件当作已确认基线。
 
 ```sh
-docker compose --env-file .local/compose.env run --rm fns-headless
+# 执行一轮；仅完整收敛返回 0
+docker compose --env-file .local/compose.env run --rm fns-headless once
+# 常驻运行，同一组挂载目录可停止后恢复
+docker compose --env-file .local/compose.env up -d fns-headless
+# 通过运行中所有者查询上次确认检查点
+docker compose --env-file .local/compose.env exec fns-headless node /app/cli.cjs status
 ```
 
-Compose 将笔记目录挂载为 `/vault`、状态目录挂载为 `/state`，以 secret 文件传入 token。采用非 root UID、只读容器根文件系统，默认 512 MiB 内存、2 CPU、64 个进程上限，不发布网络端口，不自动重启。
+Compose 使用非 root 用户、只读容器根文件系统、512 MiB 内存、2 CPU、64 个进程上限，不发布网络端口。当前不自动重启；常驻运行会对连续失败进行最多 8 次有界尝试，间隔退避至最多 60 秒，状态损坏和已知身份错配立即失败。`SIGINT`/`SIGTERM` 取消在途传输，完成已接受的本地修改后释放目录所有权；未确认操作保留供下次重试。
 
-## 使用现有 JSON 凭据
-
-JSON 字段为 `api`、`apiToken`、`vault`。本仓库的本机测试副本位于已忽略的 `.local/fns.secrets.json`。下面直接消费该文件；每次测试选择一组新的空目录：
-
-```sh
-mkdir -m 700 .local/docker-vault .local/docker-state
-docker run --rm --read-only --cap-drop=ALL \
-  --security-opt=no-new-privileges --memory=512m --cpus=2 --pids-limit=64 \
-  --user "$(id -u):$(id -g)" \
-  --mount "type=bind,src=$PWD/.local/docker-vault,dst=/vault" \
-  --mount "type=bind,src=$PWD/.local/docker-state,dst=/state" \
-  --mount "type=bind,src=$PWD/.local/fns.secrets.json,dst=/run/secrets/fns.json,readonly" \
-  -e FNS_CREDENTIALS_FILE=/run/secrets/fns.json \
-  -e FNS_LOCAL_WRITER_MODE=exclusive \
-  fast-note-sync-headless-client:local
-```
-
-命令默认执行 `pull`。JSON 模式与分开配置 `FNS_ENDPOINT/FNS_VAULT/FNS_TOKEN_FILE` 二选一，避免不明确的配置覆盖。修改上游时更新 JSON 中的 `api` 或使用 Compose 的 `FNS_ENDPOINT`；修改同步目标时更新宿主机挂载路径。
-
-## 配置与结果
+## 配置
 
 | 配置 | 含义 |
 | --- | --- |
-| `FNS_ENDPOINT` | 现有同步服务 URL，支持 HTTP/HTTPS；不包含令牌、query 或 fragment |
-| `FNS_VAULT` | 远端知识库名称 |
-| `FNS_TOKEN_FILE` | 容器内仅包含 token 的文件路径 |
-| `FNS_CREDENTIALS_FILE` | 可替代以上三项的 JSON 文件路径 |
-| `FNS_VAULT_DIR` | 容器内笔记目录，默认 `/vault` |
-| `FNS_STATE_DIR` | 容器内独立状态目录，默认 `/state` |
-| `FNS_LOCAL_WRITER_MODE` | 必须明确设为 `exclusive`；使用方保证本地排他写入 |
+| `FNS_ENDPOINT` | HTTP/HTTPS 上游地址，不含账号、query 或 fragment |
+| `FNS_VAULT` | 远端 Vault 名称 |
+| `FNS_TOKEN_FILE` | 仅含 token 的文件路径，Compose 挂载到 `/run/secrets/fns_token` |
+| `FNS_CREDENTIALS_FILE` | 替代以上三项的 JSON 文件，字段 `api`、`apiToken`、`vault`；两种配置二选一 |
+| `FNS_VAULT_DIR` / `FNS_STATE_DIR` | 容器内目录，默认 `/vault` / `/state`；宿主机路径通过挂载配置 |
+| `FNS_LOCAL_WRITER_MODE` | 必须明确为 `controlled` 或 `exclusive` |
+| `FNS_SYNC_INTERVAL_MS` | 轮次之间的等待，默认 5000，范围 1000–3600000 毫秒 |
+| `FNS_PROTOBUF` | 默认 `true`，可设为 `false` 使用 JSON |
 
-退出码 `0` 表示本轮笔记与附件批次均提交，且已应用文件的完整摘要复核通过。标准输出和 `/state/receipt.json` 的结果为 `scope: initial-readonly-copy`、`status: read-complete`，不表示双向同步成功。退出码 `2` 表示配置、校验、冲突、取消或运行失败；在状态目录准入前的失败只输出回执，不修改已有状态文件。
+`controlled`：外部写入者通过运行中所有者的 `local-write` 入口提交带预期版本的请求。Ops 必须限制 Bot 直接写入笔记目录；配置名称本身不构成权限隔离。`exclusive`：使用方保证只有客户端能写目标目录。两个模式都禁止以不同状态目录启动第二个同步写入者。
 
-再次使用非空目录会返回 `initial-copy-requires-empty-directories`；保留原数据，选择新的空目录重试。不得删除状态后把旧文件当成可恢复基线。`SIGTERM`/`SIGINT` 取消在途接收并保留未完成状态；不会将残缺附件发布为完整文件。
+本机已有 JSON 凭据可只读挂载到 `/run/secrets/fns.json`，设置 `FNS_CREDENTIALS_FILE=/run/secrets/fns.json`；不要同时配置单独的 endpoint/vault/token。凭据不应放进命令参数、镜像或 Git。
 
-已测试上游版本为 `3.5.1`、`3.6.1`。当前每种集合最多接收 256 MiB，笔记/附件单项上限为 20/32 MiB，每种集合传输最多 5 分钟。超限、哈希不匹配均返回失败；真实库中已有一例附件元数据哈希不一致，另有附件总量超限，详见 [验证记录](VALIDATION.md)。容器没有绕过这些约束。
+## 结果和受控写入
 
-## 交付给使用方
+`once` 退出码：`0` 表示该轮笔记和附件观察版本收敛、不可变上传版本已确认、最后本地扫描与检查点在同一互斥范围完成；`2` 表示冲突、未完成或错误；`130` 表示取消。输出为 JSON，包含 `status`、`pending`、`conflicts`、`historyUnverified`、`lastSuccess` 和本轮上传/下载数。`scope: bidirectional-files` 不包括空目录、Obsidian 配置或延期的采样盲区专项审计。
 
-本次交付 `Dockerfile`、`compose.yaml`、`compose.env.example`、本说明和精确源码提交；使用方可从固定提交构建镜像，也可使用 Gitea 自动构建的预览镜像。后续正式发布需补齐双向/恢复验收，再交付独立 Headless 版本号、兼容矩阵与回滚说明。Hermes Ops 负责部署、凭据挂载、权限和生产切换，本仓库负责客户端及其运行契约。
+`status` 只读查询不会启动一次网络同步，`lastSuccess` 只表示上次完成时间，不承诺查询时本地和远端仍相同。普通输出不包含凭据、笔记路径或内容。状态目录中 `control.sock` 为 `0600` Unix socket，客户端通过目录描述符寻址，较长的项目目录也可使用。
+
+`local-write` 从标准输入读取 JSON 请求，再交给运行中所有者；不要自行写 SQLite。请求字段及例子见 [本地状态契约](STATE.md)。返回 `applied` 仅表示本地修改持久化，`synchronization: not-confirmed`，要等待后续同步确认。幂等 ID 相同但载荷不同会拒绝。
+
+保留的 `pull` 命令仍只向全新空目录做一次只读复制，输出 `scope: initial-readonly-copy`，不支持恢复。它不是新的默认模式。
+
+## 当前边界
+
+已验证原版服务端 3.5.1、3.6.1，沿用官方稳定插件 2.4.0 的消息、编码、分页和分片。删除/重命名不因缺少原子 CAS 而禁用，但继承官方竞争窗口；身份核对覆盖端点、认证 UID、Vault 名称及本地目录，无法保证识别所有同址后端替换。不修改上游服务。
+
+单项笔记/附件上限 20/32 MiB；每个远端集合及本地扫描上限 256 MiB、1 万项。每个集合最多 5 分钟；一次只执行一个上传。当前完整清单和每次上传读回复用官方下载链路，开销随库大小增加，尚未做增量性能优化。元数据和操作数有上限，快照总空间配额仍待完成。超限、正文哈希不匹配、无可靠删除历史均不会报告同步完成。真实库已观察到的哈希不一致及容量限制见 [验证记录](VALIDATION.md)。
+
+冲突保留三方快照并阻止相关路径自动覆盖；馆长决策入口尚待接入。Hermes Ops 负责部署、权限、备份、Bot 接入和生产切换，本仓库不代替其业务验收。
 
 ### Gitea 自动构建
 
@@ -94,12 +92,14 @@ docker compose --env-file .local/compose.env run --rm --no-build fns-headless
 
 ## 可重复验证
 
-本机使用 rootless Podman 构建同一 Dockerfile；以下探针自行启动、清理固定摘要的临时服务端，不读取真实凭据：
+探针只消费自行启动的固定摘要临时服务和合成凭据，临时文件集中在本仓库忽略的 `.local/`，结束后清理。
 
 ```sh
+pnpm run test:sync
+node scripts/probe-server-capabilities.mjs --reconcile
+node scripts/probe-server-capabilities.mjs --reconcile --server-version=3.5.1
 podman build -t localhost/fast-note-sync-headless-client:local .
-node scripts/probe-server-capabilities.mjs --container-pull --server-version=3.5.1
-node scripts/probe-server-capabilities.mjs --container-pull
+node scripts/probe-server-capabilities.mjs --container-sync
 ```
 
-验证非 root 用户、只读根文件系统、可配置上游/挂载目录、笔记/附件完整字节、持久化回执、缺少写入约定零副作用、非空目录重复启动拒绝和输出隐私。该验证与完整双向及 Hermes 业务验收分开记录。
+`--reconcile` 验证双向笔记、9 MiB 附件、重启后的离线删除、幂等空同步，以及独立 CLI 进程的常驻运行、受控写入、重复启动保护、停止恢复和普通输出隐私。`--container-sync` 追加同一个 Dockerfile 的非 root 容器双向上传/下载和持久状态重启检查。它们不替代实际 Obsidian 与 Hermes 的业务回执。

@@ -64,7 +64,7 @@ export class VaultScanner {
     return new Map([...entries].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0));
   }
 
-  async scan(signal?: AbortSignal): Promise<ScanManifest> {
+  async scan(signal?: AbortSignal, onVerified?: (manifest: ScanManifest) => void): Promise<ScanManifest> {
     try {
       return await this.owner.exclusive(async () => {
         if (signal?.aborted) throw new ScanError("scan-cancelled");
@@ -98,6 +98,9 @@ export class VaultScanner {
           this.state.commit([{ type: "put", expectedRevision: previous?.revision ?? null,
             record: { formatVersion: 1, kind: "scan", id: "latest", manifest: snapshot, fileCount: manifest.files.length, directoryCount: manifest.directories.length, byteCount: total } }]);
         }
+        // The synchronous checkpoint callback shares the writer exclusion with
+        // the final observation; a queued controlled edit cannot slip between.
+        onVerified?.(manifest);
         return manifest;
       });
     } catch (error) { throw error instanceof ScanError ? error : new ScanError("scan-failed"); }
