@@ -8,11 +8,14 @@ import type { PullConnectionOptions } from "./pull_collection";
 import { SyncCoordinator } from "./reconcile";
 import { localControlHandler, startControl, ControlError } from "./control";
 import type { ConflictDecision } from "./resolution";
+import { SnapshotStore } from "./snapshots";
+import { MAX_SNAPSHOT_BYTES } from "./limits";
 
 export interface RuntimeConfig extends PullConnectionOptions {
   vaultDirectory: string;
   stateDirectory: string;
   writingMode: "controlled" | "exclusive";
+  snapshotQuotaBytes?: number;
 }
 export class RuntimeError extends Error {
   constructor(public readonly code: "local-writer-contract-required" | "invalid-config" | "state-permissions") { super(code); this.name = "RuntimeError"; }
@@ -20,10 +23,12 @@ export class RuntimeError extends Error {
 export async function openSyncRuntime(config: RuntimeConfig) {
   if (!["controlled", "exclusive"].includes(config.writingMode)) throw new RuntimeError("local-writer-contract-required");
   if (!config.vaultDirectory || !config.stateDirectory) throw new RuntimeError("invalid-config");
+  if (config.snapshotQuotaBytes !== undefined && (!Number.isSafeInteger(config.snapshotQuotaBytes) || config.snapshotQuotaBytes < 1 || config.snapshotQuotaBytes > MAX_SNAPSHOT_BYTES)) throw new RuntimeError("invalid-config");
   const owner = OwnedDirectories.acquire(config.vaultDirectory, config.stateDirectory);
   let state: StateStore | undefined, control: Awaited<ReturnType<typeof startControl>> | undefined;
   try {
     if ((lstatSync(config.stateDirectory).mode & 0o077) !== 0) throw new RuntimeError("state-permissions");
+    SnapshotStore.configure(owner.state, config.snapshotQuotaBytes);
     const database = join(config.stateDirectory, "state.db");
     state = new StateStore(database, { create: !existsSync(database) });
     const identity = new IdentityBinding(owner, state, config.endpoint, config.vault);

@@ -191,3 +191,11 @@ Node 24.14.0 / pnpm 11.1.2 下，现有全部测试套件、插件构建、Headl
 4. 建立可重复的插件基线后，执行 HANDOFF 的阶段 1；新增 headless 测试应覆盖实际宿主边界。
 
 本次仅验证项目准备与上游基线，没有运行真实 Vault 同步、双向服务集成或馆长任务验收。
+
+### 资源限制实测增量
+
+固定服务端 3.6.1、Linux rootless Podman、非 root/只读根文件系统、512 MiB 内存/2 CPU：`node scripts/probe-server-capabilities.mjs --container-sync` 通过。32 MiB 附件上传并由另一独立客户端完整读回，容器 cgroup 峰值 **260,608,000 字节**（一次合成测试观测值，不代表所有库存组合的峰值）。快照配额设为 1 字节时返回 `snapshot-limit`、退出 2，待上传文件保留且远端不存在；3 MiB tmpfs 状态盘写入 4 MiB 新内容时实际磁盘写满，返回 `scan-failed`、退出 2，原内容保留，未发送该文件。
+
+`test:resources` 覆盖共享预算、重启计数、发布硬链接、遗留临时文件、发布后报错的预算重算、拒绝本地写入时保留原版本，以及实际完整扫描 288 MiB 成功和超出 1 GiB 保留旧清单。默认快照配额为 4 GiB，上限可配置至 16 GiB；当前无自动历史回收。
+
+冲突接口提交 `f3456189de978569667eb501379cd9507940aa77` 已由 Gitea run 30 构建通过，ARM64 镜像为 `g1t.sigmoid.cc:53691/diomgis/fast-note-sync-headless-client@sha256:27d24fc421b78fd3cf3e876461cdb6c60d01e6cf3142a49f58122d78acdf3de6`。该镜像含双向文件同步、常驻与通用冲突决策；本节资源配额改动尚待下一次构建。

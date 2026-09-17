@@ -6,6 +6,7 @@ import { sendNoteInventory } from "../lib/sync/note_protocol";
 import { sendFileInventory } from "../lib/sync/file_protocol";
 import { sendPageAcknowledgement, syncPayload } from "../lib/sync/sync_protocol";
 import { validIdentifier } from "./state_records";
+import { MAX_VAULT_BYTES } from "./limits";
 
 interface Page { total: number; last: boolean; items: Map<string, string>; completed: boolean }
 type Sender = BatchSyncHost["websocket"] & { Send(action: string, data: unknown): void };
@@ -84,7 +85,10 @@ export class CollectionPull<C extends "notes" | "files"> {
       if (this.stopped) return;
       if (!object(data)) throw this.error("invalid-message");
       await this.handle(action, data);
-    }).catch(error => this.fail(error instanceof PullError ? error : this.error("application-failed")))
+    }).catch(error => {
+      const code = (error as { code?: string }).code;
+      this.fail(error instanceof PullError ? error : code && ["snapshot-limit", "remote-limit"].includes(code) ? new PullError(code) : this.error("application-failed"));
+    })
       .finally(() => { this.queued--; this.queuedBytes -= size; });
   }
 
@@ -146,7 +150,7 @@ export class CollectionPull<C extends "notes" | "files"> {
       }
       if (previous !== undefined || page.items.size >= page.total || this.received >= 10000) throw this.error("invalid-message");
       if (this.stopped) return;
-      if (!integer(byteLength) || (this.receivedBytes += byteLength) > 256 * 1024 * 1024) throw this.error("pull-limit");
+      if (!integer(byteLength) || (this.receivedBytes += byteLength) > MAX_VAULT_BYTES) throw this.error("pull-limit");
       const result = await apply();
       if (result === "conflict") throw this.error("conflict");
       if (result !== "applied" && result !== "unchanged") throw this.error("application-failed");

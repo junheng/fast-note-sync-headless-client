@@ -39,7 +39,7 @@ export async function runSyncCli({ args = process.argv.slice(2), env = process.e
       "status: query owner or last checkpoint; local-write: JSON request on stdin, through running owner.\n" +
       "pull: initial read-only copy, fresh directories only.\n" +
       "Required for sync: FNS_ENDPOINT, FNS_VAULT, FNS_TOKEN_FILE (or FNS_CREDENTIALS_FILE), FNS_VAULT_DIR, FNS_STATE_DIR, FNS_LOCAL_WRITER_MODE=controlled|exclusive\n" +
-      "Optional: FNS_SYNC_INTERVAL_MS=5000 (1000..3600000), FNS_PROTOBUF=true|false. Exit: 0 completed, 2 conflict/incomplete/error, 130 cancelled."); return;
+      "Optional: FNS_SYNC_INTERVAL_MS=5000 (1000..3600000), FNS_PROTOBUF=true|false, FNS_SNAPSHOT_QUOTA_BYTES=4294967296 (1..17179869184). Exit: 0 completed, 2 conflict/incomplete/error, 130 cancelled."); return;
   }
   const controller = new AbortController(), abort = () => controller.abort();
   process.once("SIGINT", abort); process.once("SIGTERM", abort);
@@ -77,8 +77,10 @@ export async function runSyncCli({ args = process.argv.slice(2), env = process.e
     if (!env.FNS_VAULT_DIR || !env.FNS_STATE_DIR || env.FNS_PROTOBUF && !["true", "false"].includes(env.FNS_PROTOBUF)) invalid();
     const interval = Number(env.FNS_SYNC_INTERVAL_MS ?? 5000);
     if (!Number.isSafeInteger(interval) || interval < 1000 || interval > 3600000) invalid();
+    const quota = env.FNS_SNAPSHOT_QUOTA_BYTES === undefined ? undefined : Number(env.FNS_SNAPSHOT_QUOTA_BYTES);
+    if (quota !== undefined && (!Number.isSafeInteger(quota) || quota < 1 || quota > 16 * 1024 * 1024 * 1024)) invalid();
     runtime = await openSyncRuntime({ ...config, vaultDirectory: env.FNS_VAULT_DIR, stateDirectory: env.FNS_STATE_DIR,
-      writingMode: env.FNS_LOCAL_WRITER_MODE, protobufEnabled: env.FNS_PROTOBUF !== "false", signal: controller.signal, transferTimeoutMs: 300000 });
+      writingMode: env.FNS_LOCAL_WRITER_MODE, snapshotQuotaBytes: quota, protobufEnabled: env.FNS_PROTOBUF !== "false", signal: controller.signal, transferTimeoutMs: 300000 });
     if (command === "daemon") await runtime.listen();
     let failures = 0;
     do {

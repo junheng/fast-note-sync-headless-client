@@ -6,7 +6,7 @@ context: |
   Keep OpenSpec structural headings and SHALL/MUST keywords in English.
   代码、schema 字段和日志使用英文。
   本项目是 haierkeys/obsidian-fast-note-sync 的维护 fork，目标是 Node.js headless 同步客户端。
-  当前源码仍是 Obsidian 插件，headless 服务尚未实现；不要将规划描述为已有能力。
+  已实现独立 Node 双向文件同步与通用冲突入口，同时保留插件构建；能力与验收状态以当前代码、任务及验证记录为准，不将未完成项描述为已实现。
   开始设计或实现前阅读 AGENTS.md、docs/headless/HANDOFF.md 和 docs/headless/UPSTREAM.md。
   上游基线必须是已发布、非草稿、非预发布的稳定版 tag 与精确提交，以 docs/headless/BASELINE.json 为准；不跟随 master/main 分支头，未发布修复作为独立 backport 评审。
   复用上游协议并抽取窄宿主接口，保持原插件构建可用；避免完整模拟 Obsidian 或另写一套协议。

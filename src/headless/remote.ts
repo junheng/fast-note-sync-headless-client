@@ -12,6 +12,7 @@ import { FilePull } from "./file_pull";
 import { uploadOperation } from "./upload";
 import { contentListRoute } from "../lib/sync/content_routes";
 import { validSyncPath } from "./sync_validation";
+import { MAX_VAULT_BYTES } from "./limits";
 
 export interface RemoteInventory {
   files: Map<string, FileVersion>;
@@ -78,19 +79,22 @@ export class UpstreamRemote implements SyncPeer {
     await this.owner.exclusive(async () => this.identity.verify(evidence));
   }
 
-  private async collection(collection: "notes" | "files", signal?: AbortSignal): Promise<{ files: Map<string, FileVersion>; deleted: Set<string>; lastTime: number }> {
+  private async collection(collection: "notes" | "files", signal?: AbortSignal, maxBytes = MAX_VAULT_BYTES): Promise<{ files: Map<string, FileVersion>; deleted: Set<string>; lastTime: number; bytes: number }> {
     this.identity.assertVerified();
     const files = new Map<string, FileVersion>(), deleted = new Set<string>();
+    let bytes = 0;
+    const account = (size: number) => { if ((bytes += size) > maxBytes) throw new RemoteError("remote-limit"); };
     const options = { ...this.options, signal, onAbsent: (path: string) => { deleted.add(path); return Promise.resolve(true); } };
     const receipt = await pullCollection(options, collection, common => collection === "notes"
       ? new NotePull({ ...common, onNote: async note => {
-        this.identity.assertVerified(); files.set(note.path, await this.snapshots.put(Buffer.from(note.content), "note")); return "unchanged";
+        this.identity.assertVerified(); const content = Buffer.from(note.content); account(content.length);
+        files.set(note.path, await this.snapshots.put(content, "note")); return "unchanged";
       } })
       : new FilePull({ ...common, directory: this.owner.state, onFile: async (file, bytes) => {
-        this.identity.assertVerified(); files.set(file.path, await this.snapshots.put(bytes, "file")); return "unchanged";
+        this.identity.assertVerified(); account(bytes.length); files.set(file.path, await this.snapshots.put(bytes, "file")); return "unchanged";
       } }));
     this.identity.assertVerified();
-    return { files, deleted, lastTime: receipt.lastTime };
+    return { files, deleted, lastTime: receipt.lastTime, bytes };
   }
 
   private async recycled(collection: "notes" | "files", signal?: AbortSignal): Promise<Set<string>> {
@@ -117,7 +121,15 @@ export class UpstreamRemote implements SyncPeer {
 
   async inventory(signal?: AbortSignal): Promise<RemoteInventory> {
     await this.authenticate(signal);
-    const notes = await this.collection("notes", signal), files = await this.collection("files", signal);
+    const notes = await this.collection("notes", signal), files = await this.collection("files", signal, MAX_VAULT_BYTES - notes.bytes);
+    const entries = new Set<string>();
+    for (const path of [...notes.files.keys(), ...files.files.keys()]) {
+      const parts = path.split("/");
+      for (let i = 1; i <= parts.length; i++) {
+        entries.add(parts.slice(0, i).join("/"));
+        if (entries.size > 10000) throw new RemoteError("remote-limit");
+      }
+    }
     // Missing from a complete inventory is not alone a remote deletion intent.
     // Recycle entries are the existing official history evidence; expired
     // history remains explicitly unverified in reconciliation.

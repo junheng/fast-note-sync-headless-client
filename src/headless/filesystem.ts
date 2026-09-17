@@ -352,6 +352,28 @@ export class SafeDirectory {
     });
   }
 
+  // Flat immutable-store accounting includes reserved temporary names left by
+  // a crash. It never follows links or removes bytes; publication aliases count
+  // once by inode. Live application journals are not disposable staging.
+  storageUsage(relative: string): { bytes: number; files: number; identity: string } {
+    return this.withParent(relative, (parent, leaf) => {
+      const fd = openSync(`${anchor(parent)}/${leaf}`, DIRECTORY_FLAGS);
+      try {
+        const directory = fstatSync(fd, { bigint: true }), seen = new Set<string>();
+        let bytes = 0;
+        for (const name of names(fd)) {
+          const entry = lstatSync(`${anchor(fd)}/${name}`, { bigint: true });
+          if (!entry.isFile() || entry.size > BigInt(MAX_FILE_BYTES)) throw new FilesystemError("unsafe-path");
+          const id = `${entry.dev}:${entry.ino}`;
+          if (!seen.has(id)) { seen.add(id); bytes += Number(entry.size); }
+        }
+        this.assertIdentity();
+        if (realpathSync(anchor(fd)) !== `${this.root}/${relative}`) throw new FilesystemError("identity-mismatch");
+        return { bytes, files: seen.size, identity: `${directory.dev}:${directory.ino}` };
+      } finally { closeSync(fd); }
+    });
+  }
+
   createDirectory(relative: string): void {
     this.withParent(relative, (parent, leaf) => {
       mkdirSync(`${anchor(parent)}/${leaf}`, { mode: 0o700 });

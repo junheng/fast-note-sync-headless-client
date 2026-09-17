@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { loadBundle } from "./load-bundle.mjs";
-export async function probeReconcile({ endpoint, token, onStage, withContainer = false }) {
+export async function probeReconcile({ endpoint, token, onStage, withContainer = false, withRename = false }) {
   const { exports: api } = await loadBundle("tests/support/headless-entry.ts");
   const { OwnedDirectories, StateStore, IdentityBinding, UpstreamRemote, SyncCoordinator, fullDigest } = api;
   const root = await mkdtemp(path.resolve(".local/reconcile-service-"));
@@ -39,6 +39,18 @@ export async function probeReconcile({ endpoint, token, onStage, withContainer =
       assert.equal(b.owner.vault.readOptional(file), null);
       const empty = await cycle(a, `${kind}-idempotent`); assert.equal(empty.uploaded, 0); assert.equal(empty.downloaded, 0);
       results.push({ kind, bidirectional: true, restart: true, offlineDelete: true, idempotent: true, fullReadback: true, bytes: bytes.length });
+    }
+    if (withRename) {
+      for (const suffix of ["md", "bin"]) {
+        const source = `rename.${suffix}`, target = `nested/renamed.${suffix}`, bytes = Buffer.from("rename synthetic");
+        await edit(a, source, bytes); await cycle(a, "rename-base-upload"); await cycle(b, "rename-base-download");
+        a.owner.vault.createDirectories("nested");
+        assert.equal((await a.sync.requests.submit({ requestId: `rename-${suffix}`, operation: "rename", path: source, targetPath: target,
+          targetExpected: null, contentKind: suffix === "md" ? "note" : "file", expected: { sha256: fullDigest(bytes), size: bytes.length } })).status, "applied");
+        await cycle(a, "rename-source"); await cycle(b, "rename-receiver");
+        assert.equal(b.owner.vault.readOptional(source), null); assert.deepEqual(b.owner.vault.read(target), bytes);
+        results.push({ rename: true, kind: suffix === "md" ? "note" : "file", fullReadback: true });
+      }
     }
     onStage("conflict-resolution");
     await edit(a, "conflict.md", Buffer.from("base")); await cycle(a, "conflict-base-upload"); await cycle(b, "conflict-base-download");
@@ -125,11 +137,19 @@ export async function probeReconcile({ endpoint, token, onStage, withContainer =
         "--mount", `type=bind,src=${vault},dst=/vault`, "--mount", `type=bind,src=${state},dst=/state`, "--mount", `type=bind,src=${credentials},dst=/run/secrets/token,ro=true`,
         "--env", `FNS_ENDPOINT=${endpoint}`, "--env", "FNS_VAULT=synthetic", "--env", "FNS_TOKEN_FILE=/run/secrets/token", "--env", "FNS_LOCAL_WRITER_MODE=exclusive",
         "localhost/fast-note-sync-headless-client:local", "once"];
-      const run = () => {
-        const stdout = execFileSync("podman", command, { encoding: "utf8", timeout: 90000, stdio: ["ignore", "pipe", "pipe"] });
-        assert.equal(JSON.parse(stdout).status, "synchronized");
+      const run = (args = command, expectedCode = 0) => {
+        let stdout, stderr = "", code = 0;
+        try { stdout = execFileSync("podman", args, { encoding: "utf8", timeout: 180000, stdio: ["ignore", "pipe", "pipe"] }); }
+        catch (error) { stdout = error.stdout; stderr = error.stderr; code = error.status; }
+        assert.equal(code, expectedCode, "Container returned an unexpected exit status");
+        const receipts = stdout.trim().split("\n").map(line => JSON.parse(line));
+        const receipt = receipts.find(value => "status" in value);
+        assert.equal(receipt.status, expectedCode === 0 ? "synchronized" : "incomplete");
+        const metric = receipts.find(value => "peakBytes" in value);
+        if (metric) { assert.ok(metric.peakBytes > 0 && metric.peakBytes <= 512 * 1024 * 1024); receipt.peakBytes = metric.peakBytes; }
         for (const value of [token, root, "container.md", "container synthetic"]) assert.equal(stdout.includes(value), false);
-        return JSON.parse(stdout);
+        assert.equal(stderr.includes(token), false);
+        return receipt;
       };
       assert.equal(run().uploaded, 1); await cycle(b, "container-upload-readback");
       assert.equal(b.owner.vault.read("container.md").toString(), "container synthetic");
@@ -137,6 +157,33 @@ export async function probeReconcile({ endpoint, token, onStage, withContainer =
       assert.equal(run().downloaded, 1); assert.equal((await readFile(path.join(vault, "container.md"))).toString(), "modified remotely");
       assert.equal(run().uploaded, 0);
       results.push({ container: true, nonRoot: true, readOnlyRoot: true, bidirectional: true, restart: true, privateOutput: true });
+      onStage("container-max-attachment");
+      const maximum = Buffer.alloc(32 * 1024 * 1024, 93);
+      await writeFile(path.join(vault, "maximum.bin"), maximum);
+      const measured = [...command.slice(0, -2), "--entrypoint", "/bin/sh", command.at(-2), "-c",
+        'node /app/cli.cjs once\nsync_code=$?\nIFS= read -r peak < /sys/fs/cgroup/memory.peak\nprintf \'{"peakBytes":%s}\\n\' "$peak"\nexit "$sync_code"'];
+      const maximumReceipt = run(measured); assert.equal(maximumReceipt.uploaded, 1);
+      await cycle(b, "container-max-readback"); assert.deepEqual(b.owner.vault.read("maximum.bin"), maximum);
+      onStage("container-snapshot-quota");
+      await writeFile(path.join(vault, "quota.bin"), "quota synthetic");
+      const quotaReceipt = run([...command.slice(0, -2), "--env", "FNS_SNAPSHOT_QUOTA_BYTES=1", ...command.slice(-2)], 2);
+      assert.equal(quotaReceipt.code, "snapshot-limit"); assert.equal((await readFile(path.join(vault, "quota.bin"))).toString(), "quota synthetic");
+      await cycle(b, "container-quota-no-upload"); assert.equal(b.owner.vault.readOptional("quota.bin"), null);
+      await edit(b, "maximum.bin", null); await cycle(b, "container-remove-large-fixture");
+      onStage("container-disk-full");
+      const fullVault = path.join(root, "full-vault"); await mkdir(fullVault, { mode: 0o700 });
+      const preserved = Buffer.alloc(4 * 1024 * 1024, 74); await writeFile(path.join(fullVault, "disk-full.bin"), preserved);
+      const fullArgs = [];
+      for (let i = 0; i < command.length - 2; i++) {
+        if (command[i] === "--mount" && command[i + 1].includes("dst=/state")) { i++; continue; }
+        if (command[i] === "--mount" && command[i + 1].includes("dst=/vault")) { fullArgs.push("--mount", `type=bind,src=${fullVault},dst=/vault`); i++; continue; }
+        fullArgs.push(command[i]);
+      }
+      fullArgs.push("--tmpfs", "/state:rw,size=3m,mode=1777", "--env", "FNS_STATE_DIR=/state/data", "--entrypoint", "/bin/sh", command.at(-2), "-c", "mkdir -m 700 /state/data && exec node /app/cli.cjs once");
+      const fullReceipt = run(fullArgs, 2); assert.equal(fullReceipt.code, "scan-failed");
+      assert.deepEqual(await readFile(path.join(fullVault, "disk-full.bin")), preserved);
+      await cycle(b, "container-disk-full-no-upload"); assert.equal(b.owner.vault.readOptional("disk-full.bin"), null);
+      results.push({ maximumAttachmentBytes: maximum.length, peakMemoryBytes: maximumReceipt.peakBytes, memoryLimitBytes: 512 * 1024 * 1024, snapshotQuotaPreservesContent: true, actualDiskFullPreservesContent: true, failedIntentsNotUploaded: true });
     }
     return results;
   } finally { for (const client of clients) { try { client.close(); } catch {} } await rm(root, { recursive: true, force: true }); }

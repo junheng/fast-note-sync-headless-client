@@ -50,13 +50,13 @@ Vault 和外置状态目录必须预先存在、为不含符号链接的规范�
 
 `ConflictStore.capture` 在同一所有者互斥范围内保存本地、远端和可用共同基线的快照。`baseStatus` 明确区分 `missing`（无历史）、`absent`（基线确认不存在）和 `present`。首次同路径内容不同保留双方，记录为 open，不按时间戳覆盖、不自动选取胜者。
 
-`test:conflicts` 覆盖首次接入、三方版本、删除对修改、二进制内容、重启，以及非法/丢失快照引用。当前只有冲突保存与读取；决策 schema、幂等提交、远端复核、Hermes 馆长接入和已解决状态均未实现，不能据此宣称通用冲突解决接口完成。
+`test:conflicts` 覆盖首次接入、三方版本、删除对修改、二进制内容、重启，以及非法/丢失快照引用。通用决策与恢复流程已实现，见本文后续决策记录及 [CONTROL.md](CONTROL.md)；外部 Hermes 馆长业务验收仍待回执。
 
 ## 受控本地入口
 
 `startLocalRuntime` 启动仅处理本地请求的所有者服务；不连接远端，不是双向同步 CLI。启动必须声明 `controlled` 或 `exclusive`，缺失时在打开状态前拒绝，Vault 和状态目录零副作用。目录须预先存在，状态目录权限为 `0700`。辅助进程通过状态目录的 `control.sock` 向所有者提交 JSON 请求；socket 权限为 `0600`，最多 4 个连接、单请求 16 MiB，内容使用标准 Base64。该权限允许同用户调用；Hermes Ops 须提供受限调用桥接并验证 Bot 无直接 Vault 写权限，配置声明和本仓库测试不能替代此验证。
 
-请求信封为 `schemaVersion: 1`、`action: "local-write"` 和 `request`。请求包含 `requestId`、`operation`（`create`、`modify`、`delete`、`rename`）、`path`、`contentKind`（`note` 或 `file`）和 `expected`（完整 `sha256`/`size`，创建必须为 `null`）。创建/修改另需 `contentBase64`；重命名另需 `targetPath` 及 `targetExpected: null`，不覆盖已有目标。父目录当前须预先存在。正文和路径只经受控接口与存储传递，不写普通日志。
+请求信封为 `schemaVersion: 1`、`action: "local-write"` 和 `request`。请求包含 `requestId`、`operation`（`create`、`modify`、`delete`、`rename`）、`path`、`contentKind`（`note` 或 `file`）和 `expected`（完整 `sha256`/`size`，创建必须为 `null`）。创建/修改另需 `contentBase64`；重命名另需 `targetPath` 及 `targetExpected: null`，不覆盖已有目标。创建文件时可创建缺少的父目录；重命名目标的父目录须预先存在。正文和路径只经受控接口与存储传递，不写普通日志。
 
 同一 ID 的相同载荷返回原回执，JSON 字段顺序不影响幂等；不同载荷返回 `request-id-reused`。陈旧请求持久化为 `stale`，保留提交内容快照。`applied` 只说明本地操作提交，所有回执均带 `synchronization: "not-confirmed"`，不会生成已确认共同基线。
 
@@ -77,3 +77,9 @@ Vault 和外置状态目录必须预先存在、为不含符号链接的规范�
 陈旧决策生成稳定 ID 的新冲突，旧记录 `superseded`，决策 `stale` 并关联下一冲突。即使生成新冲突后的终态提交失败，重启也不会让旧决定重新有效。新冲突可能带 `reason: versions-changed`；即使当前双方已恰好相同，旧合并决定也失效，需要针对新版本确认。受控查询、分块快照和决定例子见 [CONTROL.md](CONTROL.md)。
 
 新客户端会保留可读取的旧元数据；更旧镜像不认识新增记录/状态时会拒绝打开。回滚应停写并恢复匹配版本的状态备份，不将较新数据库直接交给只读预览或旧镜像，也不通过手改格式号绕过检查。
+
+## 资源配额
+
+本地扫描与远端完整库存合计最多 1 GiB、1 万个文件及目录项。快照默认 4 GiB，可通过 `FNS_SNAPSHOT_QUOTA_BYTES` 配置至最多 16 GiB，另有 5 万文件上限。所有共享状态目录的快照消费者使用同一预算；重启按磁盘实际内容重新计数，崩溃遗留临时文件计入配额，发布硬链接按 inode 去重。发布或 fsync 失败后预算失效，下次重算，不因部分写入漏记空间。已有完整快照可以复用。
+
+快照配额不是磁盘预留；实际 ENOSPC 仍可能发生。失败保留已有笔记、快照和旧扫描清单，不发送未持久化意图。当前不自动删除快照或清理已确认历史；不得通过删除状态文件来释放配额后直接重放同步。

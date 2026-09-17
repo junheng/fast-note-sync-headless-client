@@ -14,6 +14,7 @@ services:
       FNS_STATE_DIR: /state
       FNS_LOCAL_WRITER_MODE: ${FNS_LOCAL_WRITER_MODE:?Set controlled or exclusive local ownership}
       FNS_SYNC_INTERVAL_MS: ${FNS_SYNC_INTERVAL_MS:-5000}
+      FNS_SNAPSHOT_QUOTA_BYTES: ${FNS_SNAPSHOT_QUOTA_BYTES:-4294967296}
     volumes:
       - type: bind
         source: ${FNS_LOCAL_VAULT:?Set the local vault directory}

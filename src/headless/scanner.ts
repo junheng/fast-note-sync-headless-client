@@ -5,13 +5,14 @@ import type { FileVersion } from "./state_records";
 import { validFileVersion } from "./state_records";
 import { SnapshotStore, fullDigest } from "./snapshots";
 import { validSyncPath, nonnegativeInteger } from "./note_pull";
+import { MAX_VAULT_BYTES } from "./limits";
 
 export interface ScannedFile { path: string; contentKind: "note" | "file"; version: FileVersion; ctime: number; mtime: number }
 export interface ScanManifest { formatVersion: 1; files: ScannedFile[]; directories: string[] }
 export class ScanError extends Error {
-  constructor(public readonly code: "scan-failed" | "scan-changed" | "scan-limit" | "scan-cancelled" | "scan-corrupt" | "invalid-scan-interval") { super(code); this.name = "ScanError"; }
+  constructor(public readonly code: "scan-failed" | "scan-changed" | "scan-limit" | "scan-cancelled" | "scan-corrupt" | "invalid-scan-interval" | "snapshot-limit") { super(code); this.name = "ScanError"; }
 }
-const MAX_ENTRIES = 10000, MAX_TOTAL_BYTES = 256 * 1024 * 1024;
+const MAX_ENTRIES = 10000, MAX_TOTAL_BYTES = MAX_VAULT_BYTES;
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 // Observation only: missing files are not deletion intents or confirmed remote
@@ -103,7 +104,7 @@ export class VaultScanner {
         onVerified?.(manifest);
         return manifest;
       });
-    } catch (error) { throw error instanceof ScanError ? error : new ScanError("scan-failed"); }
+    } catch (error) { throw error instanceof ScanError ? error : new ScanError((error as { code?: string }).code === "snapshot-limit" ? "snapshot-limit" : "scan-failed"); }
   }
 
   // Startup scan and periodic reconciliation are authoritative; filesystem

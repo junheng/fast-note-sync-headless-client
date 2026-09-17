@@ -2,7 +2,7 @@
   "name": "fast-note-sync-headless-client",
   "version": "2.4.0",
   "type": "module",
-  "description": "Headless Node.js client for Fast Note Sync, derived from the official Obsidian plugin (implementation pending).",
+  "description": "Headless Node.js client for Fast Note Sync, derived from the official Obsidian plugin.",
   "main": "main.js",
   "scripts": {
     "dev": "npm-run-all2 --parallel devts devcss",
@@ -31,6 +31,7 @@
     "test:conflicts": "node tests/conflicts.test.mjs && node tests/resolution.test.mjs && node tests/resolution-control.test.mjs",
     "test:local": "node tests/local-requests.test.mjs && node tests/local-control.test.mjs",
     "test:scan": "node tests/scanner.test.mjs",
+    "test:resources": "node tests/resources.test.mjs",
     "test:cli": "node tests/headless-cli.test.mjs",
     "test:pull": "node tests/batch-sync.test.mjs && node tests/note-pull.test.mjs && node tests/download-batch.test.mjs && node tests/file-pull.test.mjs"
   },
