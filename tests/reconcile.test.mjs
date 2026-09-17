@@ -9,11 +9,17 @@ const root = await mkdtemp(path.resolve(".local/reconcile-"));
 const vault = path.join(root, "vault"), directory = path.join(root, "state");
 await mkdir(vault, { mode: 0o700 }); await mkdir(directory, { mode: 0o700 });
 let owner, state, identity, snapshots, outbox, sync, afterUpload;
-const files = new Map(), deleted = new Set(); let writes = 0;
+const files = new Map(), deleted = new Set(), folders = new Set(), deletedFolders = new Set(); let writes = 0;
 const subject = { serviceId: null, subjectId: "fixture", vaultId: null, vaultName: "synthetic" };
 const peer = {
   async authenticate() { identity.verify(subject); },
-  async inventory() { await this.authenticate(); return { files: new Map(files), deleted: new Set(deleted), noteTime: 1, fileTime: 1 }; },
+  async inventory(_signal, folderChanges) {
+    await this.authenticate();
+    // The service applies the declared folder inventory before answering.
+    for (const path of folderChanges?.folders ?? []) folders.add(path);
+    for (const path of folderChanges?.delFolders ?? []) { folders.delete(path); deletedFolders.add(path); }
+    return { files: new Map(files), deleted: new Set(deleted), folders: new Set(folders), deletedFolders: new Set(deletedFolders), noteTime: 1, fileTime: 1 };
+  },
   async read(file) { return files.get(file) ?? null; },
   async upload(id) {
     await this.authenticate();
@@ -62,7 +68,7 @@ try {
   result = await sync.once(); assert.equal(result.status, "incomplete"); assert.equal(result.historyUnverified, 1);
   assert.equal(owner.vault.read("nested/remote.md").toString(), "remote A");
   deleted.add("nested/remote.md");
-  result = await sync.once(); assert.equal(result.status, "synchronized"); assert.equal(owner.vault.readOptional("nested/remote.md"), null);
+  result = await sync.once(); assert.equal(result.status, "synchronized", JSON.stringify(result)); assert.equal(owner.vault.readOptional("nested/remote.md"), null);
   // A new local edit while an older immutable upload is acknowledged remains
   // incomplete until the successor is sent on the next cycle.
   await edit("editing.md", "A", "edit-A");
@@ -157,6 +163,31 @@ try {
   assert.equal(owner.vault.read("moved-folder/two.md").toString(), "two");
   assert.equal(owner.vault.readOptional("folder/one.md"), null);
   assert.equal(owner.vault.readOptional("folder/two.md"), null);
+  // Empty directories travel over the official folder channel: a local
+  // creation is declared, echoed by the service and confirmed next cycle.
+  owner.vault.createDirectories("empty-local/nested-empty");
+  result = await sync.once(); assert.equal(result.status, "synchronized", JSON.stringify(result));
+  assert.ok(folders.has("empty-local") && folders.has("empty-local/nested-empty"));
+  // A folder created on another client lands locally as an empty directory.
+  folders.add("remote-empty");
+  result = await sync.once(); assert.equal(result.status, "synchronized", JSON.stringify(result));
+  assert.ok(owner.vault.hasDirectory("remote-empty"));
+  // Local removal is declared with the previous complete scan as evidence.
+  owner.vault.removeDirectory("empty-local/nested-empty");
+  owner.vault.removeDirectory("empty-local");
+  result = await sync.once(); assert.equal(result.status, "synchronized", JSON.stringify(result));
+  assert.equal(folders.has("empty-local"), false); assert.equal(folders.has("empty-local/nested-empty"), false);
+  assert.ok(deletedFolders.has("empty-local"));
+  // A server-side folder removal is only followed while the directory is empty.
+  owner.vault.createDirectories("blocked-folder");
+  await edit("blocked-folder/keep.md", "keep", "blocked-folder-keep");
+  result = await sync.once(); assert.equal(result.status, "synchronized", JSON.stringify(result));
+  folders.delete("blocked-folder"); deletedFolders.add("blocked-folder");
+  result = await sync.once(); assert.equal(result.status, "incomplete", JSON.stringify(result));
+  assert.equal(result.foldersBlocked, 1); assert.ok(owner.vault.hasDirectory("blocked-folder"));
+  await edit("blocked-folder/keep.md", null, "blocked-folder-delete");
+  result = await sync.once(); assert.equal(result.status, "synchronized", JSON.stringify(result));
+  assert.equal(owner.vault.hasDirectory("blocked-folder"), false);
   // A local rename against a concurrent remote modification keeps the remote
   // version and publishes the moved bytes instead of overwriting either side.
   await edit("rename-source.md", "rename base", "rename-vs-modify-base");

@@ -13,7 +13,7 @@ await mkdir(vault, { mode: 0o700 }); await mkdir(directory, { mode: 0o700 });
 const subject = { serviceId: null, subjectId: "fixture", vaultId: null, vaultName: "synthetic" };
 const peer = {
   async authenticate() { identity.verify(subject); },
-  async inventory() { await this.authenticate(); return { files: new Map(files), deleted: new Set(deleted), noteTime: 1, fileTime: 1 }; },
+  async inventory() { await this.authenticate(); return { files: new Map(files), deleted: new Set(deleted), folders: new Set(), deletedFolders: new Set(), noteTime: 1, fileTime: 1 }; },
   async read(file) { if (readHook) await readHook(); return files.get(file) ?? null; },
   async upload(id) {
     await this.authenticate(); const op = state.get("operation", id).record, current = files.get(op.path) ?? null;

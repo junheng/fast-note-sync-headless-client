@@ -59,6 +59,7 @@ Headless 新增持久化状态机、内容版本核对及冲突契约；协议�
 | `src/lib/sync/batch_sync.ts`、`sync_protocol.ts` | `operator.ts` | `headless/pull_collection.ts`、`download_batch.ts` | `test:pull`、`test:sync` |
 | `src/lib/sync/note_protocol.ts` | `operator_note.ts` | `headless/note_pull.ts`、`initial_notes.ts`、`file_application.ts`、`upload.ts` | `test:pull`、`test:application`、`test:sync` |
 | `src/lib/sync/file_protocol.ts` | `operator_file.ts` | `headless/file_pull.ts`、`download_chunks.ts`、`upload.ts` | `test:pull`、`test:sync` |
+| `src/lib/sync/folder_protocol.ts` | `operator.ts` 的目录扫描/批次发送 | `headless/folder_pull.ts`、`collection_pull.ts`、`remote.ts`、`reconcile.ts` | `test:sync` 目录用例、`--folder-sync` / `--rename-sync` 探针 |
 | `src/lib/storage/file_hash_manager.ts` | 插件基线缓存与镜像恢复 | 无（Node 使用事务基线） | `test:mirror` |
 
 `headless/` 其余文件是 Node 专属宿主、持久化、恢复与入口实现，不复制协议实现：`filesystem.ts`、`state_store.ts`、`state_records.ts`、`snapshots.ts`、`file_application.ts`、`outbox.ts`、`upload.ts`、`remote.ts`、`reconcile.ts`、`resolution.ts`、`control.ts`、`local_requests.ts`、`local_runtime.ts`、`scanner.ts`、`runtime.ts`、`sync_validation.ts`、`limits.ts`。它们由 `test:all`（`test:state/filesystem/application/conflicts/local/scan/cli/pull/sync/resources`）与固定服务端探针覆盖，逐项结果见 `VALIDATION.md`。

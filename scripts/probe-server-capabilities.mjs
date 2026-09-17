@@ -142,8 +142,10 @@ try {
   } else if (process.argv.includes("--note-pull")) {
     const results = await probeNotePull({ endpoint: base, token, request, onStage: value => { stage = `note-pull-${value}`; }, onObserved: value => observed.push(value) });
     console.log(JSON.stringify({ serverVersion, image, results }));
-  } else if (process.argv.includes("--reconcile") || process.argv.includes("--container-sync") || process.argv.includes("--rename-sync")) {
-    const results = await probeReconcile({ endpoint: base, token, withContainer: process.argv.includes("--container-sync"), withRename: process.argv.includes("--rename-sync"), onStage: value => { stage = `reconcile-${value}`; } });
+  } else if (process.argv.includes("--reconcile") || process.argv.includes("--container-sync") || process.argv.includes("--rename-sync") || process.argv.includes("--folder-sync")) {
+    const results = await probeReconcile({ endpoint: base, token, withContainer: process.argv.includes("--container-sync"),
+      withRename: process.argv.includes("--rename-sync"), withFolders: process.argv.includes("--folder-sync"),
+      onStage: value => { stage = `reconcile-${value}`; } });
     console.log(JSON.stringify({ schemaVersion: 1, serverVersion, scope: "headless-reconciliation", results }));
   } else if (process.argv.includes("--headless-write")) {
     const results = await probeHeadlessWrite({ endpoint: base, token, request, onStage: value => { stage = `headless-write-${value}`; } });

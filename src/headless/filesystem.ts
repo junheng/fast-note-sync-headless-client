@@ -1,7 +1,7 @@
 import { Buffer } from "node:buffer";
 import {
   closeSync, constants, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync,
-  openSync, opendirSync, readSync, realpathSync, renameSync, statfsSync,
+  openSync, opendirSync, readSync, realpathSync, renameSync, rmdirSync, statfsSync,
   unlinkSync, writeSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -18,7 +18,7 @@ const anchor = (fd: number) => `/proc/self/fd/${fd}`;
 const folded = (name: string) => name.normalize("NFC").toUpperCase().toLowerCase();
 
 export class FilesystemError extends Error {
-  constructor(public readonly code: "unsupported-platform" | "unsupported-filesystem" | "invalid-root" | "invalid-path" | "unsafe-path" | "identity-mismatch" | "ownership-conflict" | "ownership-unavailable" | "case-collision" | "filesystem-limit" | "filesystem-failed" | "filesystem-closed" | "not-found" | "already-exists") {
+  constructor(public readonly code: "unsupported-platform" | "unsupported-filesystem" | "invalid-root" | "invalid-path" | "unsafe-path" | "identity-mismatch" | "ownership-conflict" | "ownership-unavailable" | "case-collision" | "filesystem-limit" | "filesystem-failed" | "filesystem-closed" | "not-found" | "already-exists" | "not-empty") {
     super(code);
     this.name = "FilesystemError";
   }
@@ -384,6 +384,24 @@ export class SafeDirectory {
   createDirectory(relative: string): void {
     this.withParent(relative, (parent, leaf) => {
       mkdirSync(`${anchor(parent)}/${leaf}`, { mode: 0o700 });
+      fsyncSync(parent);
+    });
+  }
+
+  // Empty directories only. The kernel enforces emptiness; this never recurses,
+  // so a directory holding files, links or crash leftovers is refused instead
+  // of being discarded. Callers must have durable evidence for the removal.
+  removeDirectory(relative: string): void {
+    this.withParent(relative, (parent, leaf) => {
+      const target = `${anchor(parent)}/${leaf}`;
+      const stat = lstatSync(target);
+      if (!stat.isDirectory()) throw new FilesystemError("unsafe-path");
+      try { rmdirSync(target); }
+      catch (error) {
+        const code = (error as { code?: string }).code;
+        if (code === "ENOTEMPTY" || code === "EEXIST") throw new FilesystemError("not-empty");
+        throw error;
+      }
       fsyncSync(parent);
     });
   }

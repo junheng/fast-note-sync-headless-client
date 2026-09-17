@@ -48,6 +48,12 @@ Vault 和外置状态目录必须预先存在、为不含符号链接的规范�
 
 ## 最小冲突记录
 
+## 目录（空目录）同步
+
+目录不承载内容，因此没有内容版本：本地目录清单来自 `VaultScanner` 的完整扫描（`ScanManifest.directories`，随扫描清单一起持久化），不新增状态格式。`SyncCoordinator` 每轮把“上次完整扫描列出、本次完整扫描缺失”的目录作为 `delFolders` 声明，把新出现的目录作为 `folders` 声明，两者都通过共享 `folder_protocol.ts` 的官方 `FolderSync` 批次发出；同一轮的服务端目录推送是读取侧依据。
+
+服务端目录删除只在本地目录为空时跟随，`SafeDirectory.removeDirectory` 只接受空目录并把 `ENOTEMPTY` 映射为 `not-empty`，非空目录保留并在 `foldersBlocked` 计数，绝不递归删除。目录声明不会被服务端回推给声明方，因此创建以该轮声明完成（多批时为 BatchAck）为回执；未声明的本地空目录不影响完成判定，下一轮会重新声明。状态新增 `foldersDeclared` 与 `foldersBlocked` 两个计数。
+
 `ConflictStore.capture` 在同一所有者互斥范围内保存本地、远端和可用共同基线的快照。`baseStatus` 明确区分 `missing`（无历史）、`absent`（基线确认不存在）和 `present`。首次同路径内容不同保留双方，记录为 open，不按时间戳覆盖、不自动选取胜者。
 
 `test:conflicts` 覆盖首次接入、三方版本、删除对修改、二进制内容、重启，以及非法/丢失快照引用。通用决策与恢复流程已实现，见本文后续决策记录及 [CONTROL.md](CONTROL.md)；外部 Hermes 馆长业务验收仍待回执。

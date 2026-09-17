@@ -139,6 +139,7 @@ node scripts/probe-server-capabilities.mjs --identity-only
 | 删除 | `FileDeleteRequest` 只有 Vault、路径、路径哈希、context；`fileService.Delete` 读取后直接标记删除 | 笔记已实测旧删除意图可删除其后已确认的新编辑；附件/目录竞态尚未验证，不能把客户端预读当作条件删除 |
 | 重命名 | 笔记目标占用检查及已删除记录复用分支 | 已占用目标 code 431 且无 context；来源更新后仍可重命名，来源/目标原子保护未证明；跨目录与大小写重命名已实际收敛，见下节 |
 | 分页、批次与 End | DTO 和路由存在 batch/page/Ack 支持 | 笔记 4 页/附件 2 页真实接收通过；提前 End、重复/乱序及持久化失败有故障注入覆盖，目录批次仍未知 |
+| 目录（FolderSync） | `operator_folder.ts` 的接收处理器与 `operator.ts` 的目录扫描/批次发送 | `--folder-sync` 在 3.6.1 与 3.5.1 通过：一端创建 `empty-folder/nested` 后另一端收到空目录，删除后另一端移除；声明同轮发出，服务端不回推声明方自己的目录；`FolderSyncRename` 与目录删除通知沿用官方语义 |
 | 删除历史 | 参考配置软删除保留为 90 天 | 离线删除已按回收站历史证据传播并实测（`--rename-sync` 的离线删除与重启用例）；缺失记录按“不删除”处理已有合成覆盖；90 天保留期到期本身无法在探针内等待，保留未知项 |
 | 主体 / Vault / 服务身份 | 用户响应有 UID，Vault 列表有 ID，版本接口有软件版本 | 同主体换令牌稳定性已验证；服务身份、重建 Vault 和服务升级恢复仍未证明，版本号不是服务身份 |
 

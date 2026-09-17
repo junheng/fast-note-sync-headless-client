@@ -1,5 +1,20 @@
 # 基线验证记录
 
+## 2026-09-17：官方目录（FolderSync）通道接入
+
+任务 5.6：目录通道不再缺失。按既有抽取模式复用官方行为，没有第二套协议实现：
+
+- `src/lib/sync/folder_protocol.ts` 从 `operator.ts` 的扫描/发送对抽取，`FolderSync` 动作、`FolderSyncBatchAck`、`folders` / `delFolders` / `missingFolders` 字段与官方向量和分块发送一致；`sync_protocol.ts` 原有的 `folder → FolderSyncPageAck` 映射继续被两端共用。
+- `CollectionPull` 增加 folders 集合：前缀 `FolderSync`，处理 `Modify` / `Delete` / `Rename` / `Page` / `End` / `BatchAck`，`FolderSyncPageAck` 复用共享映射；Node 侧新增 `folder_pull.ts`，`UpstreamRemote.inventory()` 现在同时返回目录集合与目录删除记录。
+- 本地目录知识来自既有的完整扫描清单（`ScanManifest.directories`），不新增状态格式：本地删除只在“上次完整扫描列出、本次完整扫描缺失”时作为 `delFolders` 声明；服务端目录删除只在本地目录为空时跟随（`filesystem.removeDirectory` 只允许空目录，`ENOTEMPTY` 映射为 `not-empty`），非空即阻塞并在状态中计数，绝不递归删除。
+- 目录不承载内容，因此不进入笔记/附件的内容基线；`SyncStatus` 增加 `foldersDeclared` 与 `foldersBlocked` 计数。声明与读取在同一同步轮内完成；服务端不会把某客户端自己声明的目录再推回给该客户端，创建以该轮声明完成（多批时为 BatchAck）为回执，读取仍以服务端推送为准，未收到推送不下删除结论。
+
+证据：合成用例（`test:sync`）覆盖本地空目录声明、远端空目录落地、本地空目录删除声明、服务端删除空目录、以及“目录非空时拒绝跟随删除且 `foldersBlocked = 1`”。固定服务端 `--folder-sync` 在正式 3.6.1 与 3.5.1 上均退出 0：一端创建 `empty-folder/nested` 后另一端收到空目录，删除后另一端移除该目录；`--rename-sync --folder-sync` 同时覆盖笔记/附件的双向修改、跨目录与大小写重命名、冲突合并和 CLI/常驻入口。
+
+能力观察：`GET /api/folders?vault=<name>&page=1&pageSize=100&isRecycle=false` 在 3.6.1 返回 code 1 且 `data` 为数组，`/api/folder` 返回 305。该 REST 形状未被官方插件使用，本 change 也不依赖它确认目录状态，仅作为后续可验证路径记录。
+
+OpenSpec 更新为 **47/50**；剩余为实际 Obsidian 操作矩阵与外部 Hermes 业务回执（8.7 依赖两者）。
+
 ## 2026-09-17：运行入口、有界重连与只读里程碑
 
 任务 7.1、7.2、3.6：

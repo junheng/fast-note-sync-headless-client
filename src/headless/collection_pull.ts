@@ -4,21 +4,27 @@ import { Buffer } from "node:buffer";
 import type { BatchSyncHost } from "../lib/sync/batch_sync";
 import { sendNoteInventory } from "../lib/sync/note_protocol";
 import { sendFileInventory } from "../lib/sync/file_protocol";
+import { folderItem, sendFolderInventory } from "../lib/sync/folder_protocol";
 import { sendPageAcknowledgement, syncPayload } from "../lib/sync/sync_protocol";
 import { validIdentifier } from "./state_records";
 import { MAX_VAULT_BYTES } from "./limits";
 
 interface Page { total: number; last: boolean; items: Map<string, string>; completed: boolean }
 type Sender = BatchSyncHost["websocket"] & { Send(action: string, data: unknown): void };
+export type PullCollection = "notes" | "files" | "folders";
+const actionPrefix = (collection: PullCollection) => collection === "notes" ? "NoteSync" : collection === "files" ? "FileSync" : "FolderSync";
+const kindOf = (collection: PullCollection) => collection === "notes" ? "note" : collection === "files" ? "file" : "folder";
 export class PullError extends Error {
   constructor(public readonly code: string) { super(code); this.name = "PullError"; }
 }
-export interface PullReceipt<C extends "notes" | "files"> { scope: C; received: number; pages: number; lastTime: number; remoteWrites: false; absentRemotely?: number }
+export interface PullReceipt<C extends PullCollection> { scope: C; received: number; pages: number; lastTime: number; remoteWrites: false; absentRemotely?: number }
 export interface PullOptions {
   socket: Sender; vault: string; context: string; syncUpChunkNum: number; pipelineWindowUp: number; pipelineWindowDown: number;
   onAbsent?(path: string): Promise<boolean>;
+  onRename?(oldPath: string, path: string): Promise<"applied" | "unchanged">;
   onPage?(index: number): Promise<void>;
   onEnd?(lastTime: number, count: number): Promise<void>;
+  startFolders?: { folders: string[]; delFolders: string[] };
 }
 interface PreparedItem { path: string; digest: string; byteLength: number; apply: () => Promise<"applied" | "unchanged" | "conflict"> }
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
@@ -27,7 +33,7 @@ const integer = (value: unknown): value is number => Number.isSafeInteger(value)
 // Conservative completion policy around the upstream inventory/page protocol.
 // This component owns no files or credentials. Callbacks must finish durable
 // application before resolving; a completed transfer is not a full Vault sync.
-export class CollectionPull<C extends "notes" | "files"> {
+export class CollectionPull<C extends PullCollection> {
   readonly done: Promise<PullReceipt<C>>;
   private resolve!: (receipt: PullReceipt<C>) => void;
   private reject!: (error: PullError) => void;
@@ -62,7 +68,15 @@ export class CollectionPull<C extends "notes" | "files"> {
       const host = { websocket: this.options.socket, syncState: this.options };
       const data = { context: this.options.context, lastTime: 0 };
       if (this.collection === "notes") await sendNoteInventory(host, this.options.vault, false, { ...data, notes: [], delNotes: [], missingNotes: [] });
-      else await sendFileInventory(host, this.options.vault, false, { ...data, files: [], delFiles: [], missingFiles: [] });
+      else if (this.collection === "files") await sendFileInventory(host, this.options.vault, false, { ...data, files: [], delFiles: [], missingFiles: [] });
+      else {
+        // The folder inventory carries this host's own folders and its
+        // evidence-backed deletions in the same official message the plugin
+        // sends; a missing caller payload stays an empty read-only request.
+        const start = this.options.startFolders ?? { folders: [], delFolders: [] };
+        await sendFolderInventory(host, this.options.vault, true, { ...data,
+          folders: start.folders.map(folderItem), delFolders: start.delFolders.map(folderItem), missingFolders: [] });
+      }
     } catch { this.fail(this.error("pull-failed")); }
   }
 
@@ -73,7 +87,7 @@ export class CollectionPull<C extends "notes" | "files"> {
     if (input.context && input.context !== this.options.context) return;
     if (!integer(input.code) || input.code <= 0 || input.code >= 300) { this.fail(this.error("pull-failed")); return; }
     if (input.context !== this.options.context) return;
-    const prefix = this.collection === "notes" ? "NoteSync" : "FileSync";
+    const prefix = actionPrefix(this.collection);
     if (!action.startsWith(prefix)) return;
     action = action.slice(prefix.length);
     // Account for queued text before starting any asynchronous hash or write.
@@ -93,7 +107,7 @@ export class CollectionPull<C extends "notes" | "files"> {
   }
 
   private error(suffix: string): PullError {
-    const kind = this.collection === "notes" ? "note" : "file";
+    const kind = kindOf(this.collection);
     return new PullError(suffix === "invalid-message" ? `invalid-${kind}-message` : `${kind}-${suffix}`);
   }
   cancel(code?: string): void { this.fail(code ? new PullError(code) : this.error("pull-cancelled")); }
@@ -103,11 +117,13 @@ export class CollectionPull<C extends "notes" | "files"> {
   private async handle(action: string, data: Record<string, unknown>): Promise<void> {
     if (action === "BatchAck") return;
     if (action === "NeedPush") throw new PullError("readonly-write-required");
-    if ((action === "Delete" && !this.options.onAbsent) || action === "Rename") throw new PullError("deletion-revalidation-required");
+    if ((action === "Delete" && !this.options.onAbsent) || (action === "Rename" && !this.options.onRename)) throw new PullError("deletion-revalidation-required");
     if (action === "End") {
       const counts = ["needUploadCount", "needModifyCount", "needSyncMtimeCount", "needDeleteCount"].map(key => data[key] ?? 0);
       if (!counts.every(integer) || !integer(data.lastTime)) throw this.error("invalid-message");
-      if (counts[0] !== 0) throw new PullError("readonly-write-required");
+      // Folders are declared by this host in the same message that requests the
+      // server inventory, so a folder pull never needs an extra upload round.
+      if (counts[0] !== 0 && this.collection !== "folders") throw new PullError("readonly-write-required");
       if (counts[2] !== 0 || (counts[3] !== 0 && !this.options.onAbsent)) throw new PullError("deletion-revalidation-required");
       const count = counts[1] + counts[3];
       if (count > 10000) throw this.error("pull-limit");
@@ -116,7 +132,7 @@ export class CollectionPull<C extends "notes" | "files"> {
         this.target = { count, time: data.lastTime };
         await this.options.onEnd?.(data.lastTime, count);
         if (this.stopped) return;
-        if (count > 0) sendPageAcknowledgement(this.options.socket, this.collection === "notes" ? "note" : "file", this.options.vault, this.options.context, -1);
+        if (count > 0) sendPageAcknowledgement(this.options.socket, kindOf(this.collection), this.options.vault, this.options.context, -1);
       }
     } else if (action === "Page") {
       if (!integer(data.pageIndex) || data.pageIndex >= 10000 || !integer(data.totalCount) || data.totalCount > 10000 || typeof data.isLast !== "boolean") throw this.error("invalid-message");
@@ -127,7 +143,21 @@ export class CollectionPull<C extends "notes" | "files"> {
         this.lastPage = data.pageIndex;
       }
       if (!old) this.pages.set(data.pageIndex, { total: data.totalCount, last: data.isLast, items: new Map(), completed: false });
-    } else if (action === "Delete" || action === (this.collection === "notes" ? "Modify" : "Update")) {
+    } else if (action === "Rename") {
+      if (!validSyncPath(data.oldPath) || !validSyncPath(data.path) || data.oldPathHash !== hashContent(data.oldPath) ||
+          data.pathHash !== hashContent(data.path) || data.oldPath === data.path) throw this.error("invalid-message");
+      const oldPath = data.oldPath, path = data.path;
+      let index = data.pageIndex;
+      if (index === undefined && this.options.pipelineWindowDown === 0) index = this.watermark + 1;
+      if (!integer(index) || !this.pages.has(index)) throw this.error("invalid-message");
+      const page = this.pages.get(index)!;
+      const previous = this.paths.get(path);
+      if (page.items.has(path)) { if (page.items.get(path) !== `rename:${oldPath}`) throw this.error("invalid-message"); return; }
+      if (previous !== undefined || page.items.size >= page.total || this.received >= 10000) throw this.error("invalid-message");
+      const result = await this.options.onRename!(oldPath, path);
+      if (result !== "applied" && result !== "unchanged") throw this.error("application-failed");
+      page.items.set(path, `rename:${oldPath}`); this.paths.set(path, `rename:${oldPath}`); this.received++;
+    } else if (action === "Delete" || action === (this.collection === "files" ? "Update" : "Modify")) {
       let index = data.pageIndex;
       if (index === undefined && this.options.pipelineWindowDown === 0) index = this.watermark + 1;
       if (!integer(index) || !this.pages.has(index)) throw this.error("invalid-message");
@@ -164,7 +194,7 @@ export class CollectionPull<C extends "notes" | "files"> {
       await this.options.onPage?.(index);
       if (this.stopped) return;
       page.completed = true; this.watermark = index;
-      if (!page.last) sendPageAcknowledgement(this.options.socket, this.collection === "notes" ? "note" : "file", this.options.vault, this.options.context, index);
+      if (!page.last) sendPageAcknowledgement(this.options.socket, kindOf(this.collection), this.options.vault, this.options.context, index);
     }
     if (!this.target) return;
     if (this.received > this.target.count) throw this.error("invalid-message");

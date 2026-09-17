@@ -9,6 +9,7 @@ import { pullCollection } from "./pull_collection";
 import type { PullConnectionOptions } from "./pull_collection";
 import { NotePull } from "./note_pull";
 import { FilePull } from "./file_pull";
+import { FolderPull } from "./folder_pull";
 import { uploadOperation } from "./upload";
 import { contentListRoute } from "../lib/sync/content_routes";
 import { validSyncPath } from "./sync_validation";
@@ -17,12 +18,14 @@ import { MAX_VAULT_BYTES } from "./limits";
 export interface RemoteInventory {
   files: Map<string, FileVersion>;
   deleted: Set<string>;
+  folders: Set<string>;
+  deletedFolders: Set<string>;
   noteTime: number;
   fileTime: number;
 }
 export interface SyncPeer {
   authenticate(signal?: AbortSignal): Promise<void>;
-  inventory(signal?: AbortSignal): Promise<RemoteInventory>;
+  inventory(signal?: AbortSignal, folders?: { folders: string[]; delFolders: string[] }): Promise<RemoteInventory>;
   read(path: string, signal?: AbortSignal): Promise<FileVersion | null>;
   upload(id: string, signal?: AbortSignal): Promise<void>;
 }
@@ -119,9 +122,25 @@ export class UpstreamRemote implements SyncPeer {
     throw new RemoteError("remote-limit");
   }
 
-  async inventory(signal?: AbortSignal): Promise<RemoteInventory> {
+  // The folder declaration and the inventory read share one sync round, the way
+  // the plugin sends them: the server commits a declaration with the round that
+  // carries it. An empty request therefore reads, and a populated one declares.
+  private async folderCollection(signal: AbortSignal | undefined, start: { folders: string[]; delFolders: string[] }): Promise<{ folders: Set<string>; deleted: Set<string> }> {
+    this.identity.assertVerified();
+    const folders = new Set<string>(), deleted = new Set<string>();
+    const options = { ...this.options, signal, startFolders: start };
+    await pullCollection(options, "folders", common => new FolderPull({ ...common,
+      onFolder: async folder => { this.identity.assertVerified(); folders.add(folder.path); return "unchanged"; },
+      onAbsent: async path => { this.identity.assertVerified(); deleted.add(path); return true; },
+      onRename: async (oldPath, path) => { this.identity.assertVerified(); deleted.add(oldPath); folders.add(path); return "unchanged"; } }));
+    this.identity.assertVerified();
+    return { folders, deleted };
+  }
+
+  async inventory(signal?: AbortSignal, folderChanges?: { folders: string[]; delFolders: string[] }): Promise<RemoteInventory> {
     await this.authenticate(signal);
     const notes = await this.collection("notes", signal), files = await this.collection("files", signal, MAX_VAULT_BYTES - notes.bytes);
+    const folderState = await this.folderCollection(signal, folderChanges ?? { folders: [], delFolders: [] });
     const entries = new Set<string>();
     for (const path of [...notes.files.keys(), ...files.files.keys()]) {
       const parts = path.split("/");
@@ -134,7 +153,8 @@ export class UpstreamRemote implements SyncPeer {
     // Recycle entries are the existing official history evidence; expired
     // history remains explicitly unverified in reconciliation.
     const deleted = new Set([...notes.deleted, ...files.deleted, ...await this.recycled("notes", signal), ...await this.recycled("files", signal)]);
-    return { files: new Map([...notes.files, ...files.files]), deleted, noteTime: notes.lastTime, fileTime: files.lastTime };
+    return { files: new Map([...notes.files, ...files.files]), deleted, folders: folderState.folders, deletedFolders: folderState.deleted,
+      noteTime: notes.lastTime, fileTime: files.lastTime };
   }
   async read(path: string, signal?: AbortSignal): Promise<FileVersion | null> {
     if (!validSyncPath(path)) throw new RemoteError("remote-read-failed");

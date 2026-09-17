@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn, execFileSync } from "node:child_process";
 import { loadBundle } from "./load-bundle.mjs";
-export async function probeReconcile({ endpoint, token, onStage, withContainer = false, withRename = false }) {
+export async function probeReconcile({ endpoint, token, onStage, withContainer = false, withRename = false, withFolders = false }) {
   const { exports: api } = await loadBundle("tests/support/headless-entry.ts");
   const { OwnedDirectories, StateStore, IdentityBinding, UpstreamRemote, SyncCoordinator, fullDigest } = api;
   const root = await mkdtemp(path.resolve(".local/reconcile-service-"));
@@ -39,6 +39,25 @@ export async function probeReconcile({ endpoint, token, onStage, withContainer =
       assert.equal(b.owner.vault.readOptional(file), null);
       const empty = await cycle(a, `${kind}-idempotent`); assert.equal(empty.uploaded, 0); assert.equal(empty.downloaded, 0);
       results.push({ kind, bidirectional: true, restart: true, offlineDelete: true, idempotent: true, fullReadback: true, bytes: bytes.length });
+    }
+    if (withFolders) {
+      // Empty directories use the official folder channel in both directions.
+      // The declaration is echoed by the next inventory, so a stage may need a
+      // second cycle before it converges.
+      const settle = async (client, stage) => {
+        let last;
+        for (let attempt = 1; attempt <= 3; attempt++) { onStage(`${stage}-${attempt}`); last = await client.sync.once(); if (last.status === "synchronized") return; }
+        throw new Error(`folder-stage-failed:${stage}:${JSON.stringify(last)}`);
+      };
+      a.owner.vault.createDirectories("empty-folder/nested");
+      await settle(a, "folder-create-source"); await settle(b, "folder-create-receiver");
+      assert.ok(b.owner.vault.hasDirectory("empty-folder/nested"));
+      assert.ok(b.owner.vault.hasDirectory("empty-folder"));
+      a.owner.vault.removeDirectory("empty-folder/nested"); a.owner.vault.removeDirectory("empty-folder");
+      await settle(a, "folder-delete-source"); await settle(b, "folder-delete-receiver");
+      assert.equal(b.owner.vault.hasDirectory("empty-folder"), false);
+      assert.equal(a.owner.vault.hasDirectory("empty-folder"), false);
+      results.push({ folders: true, emptyDirectoryCreate: true, emptyDirectoryDelete: true });
     }
     if (withRename) {
       for (const suffix of ["md", "bin"]) {

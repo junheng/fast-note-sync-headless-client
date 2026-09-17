@@ -19,6 +19,8 @@ export interface SyncStatus {
   pending: number;
   conflicts: number;
   historyUnverified: number;
+  foldersDeclared: number;
+  foldersBlocked: number;
   lastSuccess: number | null;
   uploaded: number;
   downloaded: number;
@@ -60,7 +62,7 @@ export class SyncCoordinator {
     const cycle = this.state.get("cycle", "latest")?.record as CycleRecord | undefined;
     // A persisted checkpoint describes the previous run, never current health.
     return { schemaVersion: 1, status: conflicts ? "conflict" : "incomplete", pending, conflicts, historyUnverified: 0,
-      lastSuccess: cycle?.completedAt ?? null, uploaded: 0, downloaded: 0 };
+      foldersDeclared: 0, foldersBlocked: 0, lastSuccess: cycle?.completedAt ?? null, uploaded: 0, downloaded: 0 };
   }
   private baselineMutation(path: string, version: FileVersion | null, id: string): Parameters<StateStore["commit"]>[0][number] {
     const old = this.state.get("baseline", pathRecordId(path));
@@ -144,6 +146,39 @@ export class SyncCoordinator {
     return count;
   }
 
+  // Folder rows carry no content, so the durable evidence for a local deletion
+  // is a previously completed scan that still listed the directory. Creations
+  // are idempotent upserts; removals follow the server only while the directory
+  // is empty, and every refusal stays observable instead of being forced.
+  private async applyFolders(remote: RemoteInventory, local: Set<string>, deletionIntents: Set<string>): Promise<number> {
+    let blocked = 0;
+    await this.owner.exclusive(async () => {
+      this.identity.assertVerified();
+      const tolerated = new Set(["already-exists", "not-found", "not-empty", "case-collision", "unsafe-path", "already-exists"]);
+      for (const path of [...remote.folders].sort()) {
+        if (local.has(path) || deletionIntents.has(path)) continue;
+        try {
+          if (this.owner.vault.hasDirectory(path)) continue;
+          const parent = path.split("/").slice(0, -1).join("/");
+          if (parent) this.owner.vault.createDirectories(parent);
+          this.owner.vault.createDirectory(path);
+        } catch (error) {
+          if (!tolerated.has((error as { code?: string }).code ?? "")) throw error;
+          blocked++;
+        }
+      }
+      for (const path of [...remote.deletedFolders].sort()) {
+        if (!local.has(path) || deletionIntents.has(path)) continue;
+        try { this.owner.vault.removeDirectory(path); }
+        catch (error) {
+          if (!tolerated.has((error as { code?: string }).code ?? "")) throw error;
+          blocked++;
+        }
+      }
+    });
+    return blocked;
+  }
+
   once(signal?: AbortSignal): Promise<SyncStatus> { return this.serialize(() => this.cycle(signal)); }
   private async cycle(signal?: AbortSignal): Promise<SyncStatus> {
     if (this.running) throw new ReconcileError("sync-busy");
@@ -156,9 +191,20 @@ export class SyncCoordinator {
         const record = value.record as ReconciliationRecord;
         if (record.status === "prepared") await this.applyPlan(record);
       }
-      const remote = await this.peer.inventory(signal);
-      let uploaded = await this.flush(remote, signal), downloaded = 0, historyUnverified = 0;
+      // Observe the complete local tree first, then declare this host's folder
+      // changes on the same connection that requests the server inventory.
+      const previousDirectories = new Set(this.scanner.latest()?.directories ?? []);
       const scan = await this.scanner.scan(signal), local = new Map(scan.files.map(file => [file.path, file.version]));
+      const localDirectories = new Set(scan.directories);
+      // Directories holding synchronized content are implied on the server, so
+      // the folder channel only has to carry directories created since the last
+      // complete scan. Upserts are idempotent; a directory that merely became
+      // empty follows the server instead of being re-declared.
+      const folderUpserts = [...localDirectories].filter(path => !previousDirectories.has(path)).sort();
+      const folderDeletions = [...previousDirectories].filter(path => !localDirectories.has(path)).sort();
+      const deletionIntents = new Set(folderDeletions);
+      const remote = await this.peer.inventory(signal, { folders: folderUpserts, delFolders: folderDeletions });
+      let uploaded = await this.flush(remote, signal), downloaded = 0, historyUnverified = 0;
       // Explicit controlled renames are durable intents. A deterministic ID
       // prevents an old local request being replayed after later path reuse.
       for (const value of allRecords(this.state, "local-request")) {
@@ -188,12 +234,35 @@ export class SyncCoordinator {
           uploaded += await this.flush(remote, signal);
         } else await this.conflict(path, there);
       }
-      const status = { ...this.status(), uploaded, downloaded, historyUnverified };
+      const foldersBlocked = await this.applyFolders(remote, localDirectories, deletionIntents);
+      // The folder channel never echoes a client's own declarations back to
+      // it, so a completed declaration (batch acknowledgement included) is the
+      // receipt. Empty directories carry no content; a lost declaration is
+      // re-sent idempotently by the next cycle.
+      const foldersDeclared = folderUpserts.length + folderDeletions.length;
+      const status = { ...this.status(), uploaded, downloaded, historyUnverified, foldersDeclared, foldersBlocked };
       // A controlled edit during transfer must remain observable as pending
       // work, even if the last operation's Ack was successful.
       await this.scanner.scan(signal, final => {
-        const stable = final.files.length === remote.files.size && final.files.every(file => sameVersion(file.version, remote.files.get(file.path) ?? null));
-        if (!status.pending && !status.conflicts && !historyUnverified && stable) {
+        // A directory holding a synchronized file exists on both sides even when
+        // the server did not list it separately, so implied parents count. An
+        // empty directory carries no content: it is either declared as an
+        // upsert or left for the next cycle without blocking completion.
+        const implied = new Set<string>();
+        for (const path of remote.files.keys()) {
+          const parts = path.split("/");
+          for (let index = 1; index < parts.length; index++) implied.add(parts.slice(0, index).join("/"));
+        }
+        const occupied = new Set<string>();
+        for (const path of [...final.files.map(file => file.path), ...final.directories]) {
+          const parts = path.split("/"); parts.pop();
+          while (parts.length) { occupied.add(parts.join("/")); parts.pop(); }
+        }
+        const localHas = new Set(final.directories);
+        const foldersStable = final.directories.every(path => !occupied.has(path) || remote.folders.has(path) || implied.has(path) || deletionIntents.has(path) || folderUpserts.includes(path)) &&
+          [...remote.folders].every(path => localHas.has(path) || deletionIntents.has(path));
+        const stable = final.files.length === remote.files.size && final.files.every(file => sameVersion(file.version, remote.files.get(file.path) ?? null)) && foldersStable;
+        if (!status.pending && !status.conflicts && !historyUnverified && !foldersBlocked && stable) {
           this.identity.assertVerified();
           const previous = this.state.get("cycle", "latest");
           const completedAt = Date.now();
