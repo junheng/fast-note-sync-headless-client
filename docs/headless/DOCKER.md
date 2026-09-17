@@ -73,7 +73,11 @@ git push origin headless/stable-2.4.0
 git push gitea headless/stable-2.4.0
 ```
 
-流水线复用 `personal-build` runner 的 Colima Docker，读取账号级 `REGISTRY_USERNAME`、`REGISTRY_PASSWORD` secrets 和 `BUILD_PROXY_URL`、`BUILD_NO_PROXY` variables。开发机的 `.local/gitea.env` 只用于仓库管理与推送，不进入镜像或工作流。CI 使用临时 Docker 认证目录并在退出时清理。
+流水线使用本仓库专属的 `mac-mini-fns-headless` runner（标签 `personal-build`），复用 Mac mini 上现有的 Colima Docker，读取账号级 `REGISTRY_USERNAME`、`REGISTRY_PASSWORD` secrets 和 `BUILD_PROXY_URL`、`BUILD_NO_PROXY` variables。开发机的 `.local/gitea.env` 只用于仓库管理与推送，不进入镜像或工作流。CI 使用临时 Docker 认证目录并在退出时清理。
+
+runner 由构建机的 `cc.sigmoid.gitea-runner-fns-headless` LaunchDaemon 管理，以 `automation` 用户运行；配置与注册文件位于该用户的 `.config/gitea-runner-fns-headless/`，工作目录位于 `.cache/gitea-runner-fns-headless/`。注册范围限定本仓库，容量为 1，标签为 `personal-build:host`，复用已有 runner 二进制。原有其他仓库的 runner 注册范围不变。迁移构建机时需在本仓库 Actions 设置重新注册 runner，不能仅依赖其他仓库同名标签。
+
+runner 进程的 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 由 LaunchDaemon 配置，用于下载远端 action；其值在配置时取自上述账号构建变量。容器构建代理则由工作流每次读取变量并写入临时 Docker 配置。代理变更后，运维需同步 runner 的进程环境并重载其服务。
 
 当前发布架构为 **linux/arm64**。每次构建发布 `g1t.sigmoid.cc:53691/diomgis/fast-note-sync-headless-client:sha-<完整提交 SHA>`，随后按摘要拉取，检查架构和源码 revision，并在只读、非 root 容器内运行 CLI 帮助。成功日志提供 `Image: ...@sha256:...`；使用方应固定该摘要，不将可重新推送的标签当作不可变版本。该检查验证镜像交付，不替代同步协议验收。
 
