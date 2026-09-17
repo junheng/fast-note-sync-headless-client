@@ -1,5 +1,11 @@
 # 基线验证记录
 
+## 2026-09-17：协议故障注入矩阵汇总
+
+任务 8.1：新增 [FAULT-MATRIX.md](FAULT-MATRIX.md) 与 `test:faults` 入口（`run-s test:state test:application test:conflicts test:local test:scan test:pull test:sync test:resources`，约 40 秒，退出码 0）。矩阵按发送与确认、附件会话与分片、落盘与提交边界、身份与资源分组，逐项列出注入点、覆盖套件和判定依据，并明确每个场景以持久化状态与完整内容摘要或逐字节比较判定，发送成功、连接成功或日志计数不作为同步证据。
+
+矩阵只汇总已存在的合成故障注入，不新增通过声明：文件应用的 8 个进程崩溃窗口、冲突决策与本地操作的 SIGKILL 位置、事务提交边界、批次与分片异常、身份错配和资源上限均来自对应套件的现有断言。`test:faults` 与 `test:all` 都可在固定 Node.js `v24.14.0` 下重复运行，固定服务端探针仍只用于确认替身没有虚构协议能力。OpenSpec 更新为 **42/50**。
+
 ## 2026-09-17：复用清单、上游合并清单与门禁
 
 任务 8.3：新增 `test:all` 作为单一测试门禁，依次运行 14 个套件（`test:auth/hash/transport/mirror/vault-name/state/filesystem/application/conflicts/local/scan/cli/pull/sync/resources`），耗时约 1 分钟，退出码 0。插件 `build`、`build:headless` 与 `lint` 同时通过，`git diff --check` 与 OpenSpec strict 校验通过，`pnpm-lock.yaml` 未改写。
