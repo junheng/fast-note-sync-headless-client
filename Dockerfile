@@ -1,4 +1,4 @@
-FROM docker.io/library/node:24.14.0-bookworm-slim@sha256:4bd6219054c8bebcd26a66bfd8ca0bd6e1024b4b97474c59bb7ee3bbcbef4fe8 AS build
+FROM docker.io/library/node:24.14.0-bookworm-slim@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8 AS build
 WORKDIR /build
 RUN npm install --global pnpm@11.1.2
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .node-version ./
@@ -8,7 +8,7 @@ COPY scripts/build-headless.mjs scripts/headless-entry.mjs scripts/
 COPY scripts/lib/ scripts/lib/
 RUN pnpm run build:headless
 
-FROM docker.io/library/node:24.14.0-bookworm-slim@sha256:4bd6219054c8bebcd26a66bfd8ca0bd6e1024b4b97474c59bb7ee3bbcbef4fe8 AS runtime
+FROM docker.io/library/node:24.14.0-bookworm-slim@sha256:d8e448a56fc63242f70026718378bd4b00f8c82e78d20eefb199224a4d8e33d8 AS runtime
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends util-linux ca-certificates \
     && rm -rf /var/lib/apt/lists/* \

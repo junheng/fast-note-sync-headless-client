@@ -59,6 +59,7 @@ jobs:
           NODE
           image="$REGISTRY_HOST/$(printf '%s' "$IMAGE_PATH" | tr '[:upper:]' '[:lower:]')"
           docker buildx build --builder default \
+            --progress plain \
             --platform linux/arm64 \
             --build-arg "VCS_REF=$COMMIT_SHA" \
             --label "org.opencontainers.image.source=$SOURCE_URL" \
