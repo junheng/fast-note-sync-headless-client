@@ -79,7 +79,7 @@ runner 由构建机的 `cc.sigmoid.gitea-runner-fns-headless` LaunchDaemon 管�
 
 runner 进程的 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 由 LaunchDaemon 配置，用于下载远端 action；其值在配置时取自上述账号构建变量。容器构建代理则由工作流每次读取变量并写入临时 Docker 配置。代理变更后，运维需同步 runner 的进程环境并重载其服务。
 
-当前发布架构为 **linux/arm64**。每次构建发布 `g1t.sigmoid.cc:53691/diomgis/fast-note-sync-headless-client:sha-<完整提交 SHA>`，随后按摘要拉取，检查架构和源码 revision，并在只读、非 root 容器内运行 CLI 帮助。成功日志提供 `Image: ...@sha256:...`；使用方应固定该摘要，不将可重新推送的标签当作不可变版本。该检查验证镜像交付，不替代同步协议验收。
+当前发布架构为 **linux/arm64**。每次构建发布 `g1t.sigmoid.cc:53691/diomgis/fast-note-sync-headless-client:sha-<完整提交 SHA>`，随后按摘要拉取，检查架构和源码 revision，并在只读、非 root 容器内运行 CLI 帮助。成功日志提供 `Image: ...@sha256:...`；其中用户名可能被 Gitea 的 secret 脱敏替换为 `***`，此时须恢复为上面的完整仓库路径。使用方应固定该摘要，不将可重新推送的标签当作不可变版本。该检查验证镜像交付，不替代同步协议验收。
 
 使用已发布镜像时，先通过 `docker login g1t.sigmoid.cc:53691` 使用自己的只读镜像凭据登录，将成功流水线输出的完整镜像摘要写入 `.local/compose.env` 的 `FNS_IMAGE`，再执行：
 
