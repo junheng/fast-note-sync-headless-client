@@ -7,6 +7,7 @@ import { UpstreamRemote } from "./remote";
 import type { PullConnectionOptions } from "./pull_collection";
 import { SyncCoordinator } from "./reconcile";
 import { localControlHandler, startControl, ControlError } from "./control";
+import type { ConflictDecision } from "./resolution";
 
 export interface RuntimeConfig extends PullConnectionOptions {
   vaultDirectory: string;
@@ -42,6 +43,14 @@ export async function openSyncRuntime(config: RuntimeConfig) {
           if (input && typeof input === "object" && !Array.isArray(input)) {
             const envelope = input as Record<string, unknown>;
             if (Object.keys(envelope).length === 2 && envelope.schemaVersion === 1 && envelope.action === "status") return sync.status();
+            if (Object.keys(envelope).length === 3 && envelope.schemaVersion === 1 && envelope.request && typeof envelope.request === "object" && !Array.isArray(envelope.request)) {
+              const request = envelope.request as Record<string, unknown>;
+              if (envelope.action === "conflict-list" && Object.keys(request).every(key => ["afterId", "limit"].includes(key))) return sync.resolver.list(request.afterId as string | undefined, request.limit as number | undefined);
+              if (envelope.action === "conflict-detail" && Object.keys(request).join() === "conflictId") return sync.resolver.detail(request.conflictId as string);
+              if (envelope.action === "decision-status" && Object.keys(request).join() === "decisionId") return sync.resolver.decision(request.decisionId as string);
+              if (envelope.action === "conflict-snapshot" && Object.keys(request).sort().join() === "conflictId,length,offset,side") return sync.resolver.snapshot(request.conflictId as string, request.side as "base" | "local" | "remote", request.offset as number, request.length as number);
+              if (envelope.action === "resolve") return sync.resolve(request as unknown as ConflictDecision, config.signal);
+            }
           }
           return local(input);
         });

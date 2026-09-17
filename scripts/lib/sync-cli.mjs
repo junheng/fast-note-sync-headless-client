@@ -20,7 +20,7 @@ function offlineStatus(env) {
   const owner = OwnedDirectories.acquire(env.FNS_VAULT_DIR, env.FNS_STATE_DIR); let state;
   try {
     state = new StateStore(path.join(env.FNS_STATE_DIR, "state.db"));
-    const conflicts = allRecords(state, "conflict").length, pending = allRecords(state, "operation").filter(v => v.record.status !== "acknowledged").length;
+    const conflicts = allRecords(state, "conflict").filter(v => v.record.status === "open").length, pending = allRecords(state, "operation").filter(v => !["acknowledged", "cancelled"].includes(v.record.status)).length;
     return { schemaVersion: 1, status: conflicts ? "conflict" : "incomplete", running: false, pending, conflicts, lastSuccess: state.get("cycle", "latest")?.record.completedAt ?? null };
   } finally { state?.close(); owner.close(); }
 }
@@ -34,7 +34,7 @@ async function pause(ms, signal) {
 export async function runSyncCli({ args = process.argv.slice(2), env = process.env } = {}) {
   if (args[0] === "pull") return runInitialCopy({ args, env });
   if (args.length === 1 && args[0] === "--help") {
-    console.log("Usage: fns-headless <once|daemon|status|local-write|pull> [--credentials-json FILE]\n" +
+    console.log("Usage: fns-headless <once|daemon|status|local-write|conflicts|conflict|conflict-snapshot|resolve|decision|pull> [--credentials-json FILE]\n" +
       "once: bidirectional sync and durable confirmation; daemon: repeat sync with local control socket.\n" +
       "status: query owner or last checkpoint; local-write: JSON request on stdin, through running owner.\n" +
       "pull: initial read-only copy, fresh directories only.\n" +
@@ -46,6 +46,17 @@ export async function runSyncCli({ args = process.argv.slice(2), env = process.e
   let runtime;
   try {
     const [command, ...rest] = args;
+    if (["conflicts", "conflict", "conflict-snapshot", "resolve", "decision"].includes(command)) {
+      if (!env.FNS_STATE_DIR) invalid();
+      let action, request;
+      if (command === "conflicts") { if (rest.length > 1) invalid(); action = "conflict-list"; request = rest.length ? { afterId: rest[0] } : {}; }
+      else if (command === "decision") { if (rest.length !== 1) invalid(); action = "decision-status"; request = { decisionId: rest[0] }; }
+      else if (command === "conflict") { if (rest.length !== 1) invalid(); action = "conflict-detail"; request = { conflictId: rest[0] }; }
+      else { if (rest.length) invalid(); action = command; request = await input(); }
+      const response = await sendControl(env.FNS_STATE_DIR, { schemaVersion: 1, action, request });
+      output(response); if (!response.ok || command === "resolve" && response.result.status !== "resolved") process.exitCode = 2;
+      return;
+    }
     if (["status", "local-write"].includes(command)) {
       if (rest.length || !env.FNS_STATE_DIR) invalid();
       if (command === "local-write") {

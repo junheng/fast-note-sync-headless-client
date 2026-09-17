@@ -21,3 +21,5 @@ export * from "../../src/headless/upload";
 export * from "../../src/headless/pull_collection";
 export * from "../../src/headless/remote";
 export * from "../../src/headless/reconcile";
+export * from "../../src/headless/resolution";
+export * from "../../src/headless/runtime";

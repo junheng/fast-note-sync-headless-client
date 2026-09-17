@@ -4,8 +4,8 @@
 
 This repository is a maintained fork of `haierkeys/obsidian-fast-note-sync`.
 Its product direction is a Node.js headless sync client. The inherited Obsidian plugin build remains supported. Node bidirectional file
-sync and daemon entry points are implemented; full conflict resolution, directory
-operations and Hermes acceptance remain pending. Do not claim the full MVP complete.
+sync, daemon entry points and versioned conflict resolution are implemented;
+directory operations, resource validation and Hermes acceptance remain pending. Do not claim the full MVP complete.
 Read `docs/headless/HANDOFF.md` and `docs/headless/UPSTREAM.md` before implementation.
 Use the formal stable upstream release pinned in `docs/headless/BASELINE.json`,
 not the tip of `master` or `main`. Review unreleased fixes as explicit, tested backports.

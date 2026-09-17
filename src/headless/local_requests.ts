@@ -58,18 +58,25 @@ export class LocalRequests {
       version: record.after ? { sha256: record.after.sha256, size: record.after.size } : null, synchronization: "not-confirmed" };
   }
 
-  async submit(input: LocalRequest): Promise<LocalReceipt> {
+  async submit(input: LocalRequest, beforeApply?: () => Promise<void>, decisionId?: string): Promise<LocalReceipt> {
     validate(input);
+    if (decisionId !== undefined && (!validIdentifier(decisionId) || !beforeApply)) throw new LocalRequestError("invalid-local-request");
     const request = { ...input, expected: input.expected ? { sha256: input.expected.sha256, size: input.expected.size } : null, ...(input.content ? { content: Uint8Array.from(input.content) } : {}) };
     const fingerprint = fullDigest(Buffer.from(JSON.stringify({ operation: request.operation, path: request.path, expected: request.expected, contentKind: request.contentKind,
       contentHash: request.content ? fullDigest(request.content) : null, targetPath: request.targetPath ?? null, targetExpected: request.targetExpected ?? null })));
     return await this.owner.exclusive(async () => {
       const prior = this.state.get("local-request", request.requestId);
-      if (prior && (prior.record.kind !== "local-request" || prior.record.fingerprint !== fingerprint)) throw new LocalRequestError("request-id-reused");
+      if (prior && (prior.record.kind !== "local-request" || prior.record.fingerprint !== fingerprint || prior.record.decisionId !== decisionId)) throw new LocalRequestError("request-id-reused");
       await this.recoverLocked();
       if (prior) {
-        return this.receipt(this.state.get("local-request", request.requestId)!.record as LocalRequestRecord);
+        const stored = this.state.get("local-request", request.requestId)!;
+        const record = stored.record as LocalRequestRecord;
+        if (record.status === "prepared" && decisionId) { await beforeApply!(); return this.receipt(await this.applyLocked(record, stored.revision)); }
+        return this.receipt(record);
       }
+      // Internal resolver validation shares this mutex with the subsequent
+      // local version check, publication and durable receipt.
+      await beforeApply?.();
       const current = this.owner.vault.readOptional(request.path);
       const identity = this.owner.vault.fileIdentity(request.path);
       const before = current === null ? null : await this.snapshots.put(current, request.contentKind);
@@ -78,7 +85,8 @@ export class LocalRequests {
       if (request.targetPath && this.owner.vault.fileIdentity(request.targetPath, request.path) !== null) reason = "target-exists";
       if (!matches(this.owner.vault.readOptional(request.path), before) || this.owner.vault.fileIdentity(request.path) !== identity) reason = "source-version";
       const record: LocalRequestRecord = { formatVersion: 1, kind: "local-request", id: request.requestId, fingerprint, operation: request.operation,
-        path: request.path, targetPath: request.targetPath ?? null, contentKind: request.contentKind, before, beforeIdentity: identity, after, status: reason ? "stale" : "prepared", reason };
+        path: request.path, targetPath: request.targetPath ?? null, contentKind: request.contentKind, before, beforeIdentity: identity, after, status: reason ? "stale" : "prepared", reason,
+        ...(decisionId ? { decisionId } : {}) };
       this.state.commit([{ type: "put", record, expectedRevision: null }]);
       return this.receipt(reason ? record : await this.applyLocked(record, 1));
     });
@@ -91,7 +99,7 @@ export class LocalRequests {
     for (;;) {
       const page = this.state.list("local-request", { afterId, limit: 100 });
       for (const stored of page) {
-        if (stored.record.kind === "local-request" && stored.record.status === "prepared") await this.applyLocked(stored.record, stored.revision);
+        if (stored.record.kind === "local-request" && stored.record.status === "prepared" && !stored.record.decisionId) await this.applyLocked(stored.record, stored.revision);
         else if (stored.record.kind === "local-request" && stored.record.status === "applied" && stored.record.operation === "delete") this.owner.vault.finishDeletion(stored.record.path, stored.record.fingerprint, stored.record.beforeIdentity!);
       }
       if (page.length < 100) return;
@@ -120,6 +128,10 @@ export class LocalRequests {
     if (!done && !reason) {
       switch (record.operation) {
         case "create": case "modify":
+          if (record.operation === "create") {
+            const parent = record.path.split("/").slice(0, -1).join("/");
+            if (parent) this.owner.vault.createDirectories(parent);
+          }
           this.owner.vault.write(record.path, desired!, record.operation === "create" ? "create" : "replace"); break;
         case "delete": this.owner.vault.stageDeletion(record.path, record.fingerprint, record.beforeIdentity!); break;
         case "rename": this.owner.vault.move(record.path, record.targetPath!); break;

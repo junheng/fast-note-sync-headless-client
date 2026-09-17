@@ -10,6 +10,8 @@ import { FileApplication } from "./file_application";
 import { LocalRequests } from "./local_requests";
 import { ConflictStore } from "./conflicts";
 import { VaultScanner } from "./scanner";
+import { ConflictResolver } from "./resolution";
+import type { ConflictDecision } from "./resolution";
 
 export interface SyncStatus {
   schemaVersion: 1;
@@ -30,21 +32,31 @@ const kindOf = (path: string) => path.endsWith(".md") ? "note" as const : "file"
 // owns the official protocol; this coordinator owns no second wire protocol.
 export class SyncCoordinator {
   readonly requests: LocalRequests;
+  readonly resolver: ConflictResolver;
   private snapshots: SnapshotStore;
   private applications: FileApplication;
   private outbox: DurableOutbox;
   private conflicts: ConflictStore;
   private scanner: VaultScanner;
   private running = false;
+  private queue: Promise<unknown> = Promise.resolve();
+  private serialize<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.queue.then(run, run); this.queue = next.catch(() => {}); return next;
+  }
+  resolve(decision: ConflictDecision, signal?: AbortSignal) {
+    const captured = structuredClone(decision);
+    return this.serialize(() => this.resolver.submit(captured, signal));
+  }
   constructor(private owner: OwnedDirectories, private state: StateStore, private identity: IdentityBinding, private peer: SyncPeer,
     writingMode: "controlled" | "exclusive") {
     this.requests = new LocalRequests(owner, state, writingMode);
     this.snapshots = new SnapshotStore(owner.state); this.applications = new FileApplication(owner, state, writingMode);
     this.outbox = new DurableOutbox(owner, state, identity); this.conflicts = new ConflictStore(owner, state); this.scanner = new VaultScanner(owner, state);
+    this.resolver = new ConflictResolver(owner, state, identity, peer, this.requests);
   }
   status(): SyncStatus {
-    const pending = this.outbox.operations().filter(op => op.status !== "acknowledged").length;
-    const conflicts = allRecords(this.state, "conflict").length;
+    const pending = this.outbox.operations().filter(op => !["acknowledged", "cancelled"].includes(op.status)).length;
+    const conflicts = allRecords(this.state, "conflict").filter(value => value.record.kind === "conflict" && value.record.status === "open").length;
     const cycle = this.state.get("cycle", "latest")?.record as CycleRecord | undefined;
     // A persisted checkpoint describes the previous run, never current health.
     return { schemaVersion: 1, status: conflicts ? "conflict" : "incomplete", pending, conflicts, historyUnverified: 0,
@@ -102,7 +114,7 @@ export class SyncCoordinator {
     if (digest === (remote?.sha256 ?? null)) return;
     const prior = allRecords(this.state, "conflict").some(value => {
       const conflict = value.record as ConflictRecord;
-      return conflict.path === path && (conflict.local?.sha256 ?? null) === digest && sameVersion(conflict.remote, remote);
+      return conflict.status === "open" && conflict.path === path && (conflict.local?.sha256 ?? null) === digest && sameVersion(conflict.remote, remote);
     });
     if (prior) return;
     const base = this.outbox.baseline(path);
@@ -112,9 +124,9 @@ export class SyncCoordinator {
   private async flush(remote: RemoteInventory, signal?: AbortSignal): Promise<number> {
     let count = 0;
     for (const operation of this.outbox.operations()) {
-      if (operation.status === "acknowledged") continue;
+      if (["acknowledged", "cancelled"].includes(operation.status)) continue;
       if (signal?.aborted) throw new ReconcileError("sync-cancelled");
-      if (allRecords(this.state, "conflict").some(value => (value.record as ConflictRecord).path === operation.path)) continue;
+      if (allRecords(this.state, "conflict").some(value => value.record.kind === "conflict" && value.record.status === "open" && value.record.path === operation.path)) continue;
       try {
         await this.peer.upload(operation.id, signal); count++;
         if (operation.action === "rename") { remote.files.delete(operation.path); remote.deleted.add(operation.path); }
@@ -132,12 +144,14 @@ export class SyncCoordinator {
     return count;
   }
 
-  async once(signal?: AbortSignal): Promise<SyncStatus> {
+  once(signal?: AbortSignal): Promise<SyncStatus> { return this.serialize(() => this.cycle(signal)); }
+  private async cycle(signal?: AbortSignal): Promise<SyncStatus> {
     if (this.running) throw new ReconcileError("sync-busy");
     this.running = true;
     try {
       await this.peer.authenticate(signal);
       await this.requests.recover();
+      await this.resolver.recover(signal);
       for (const value of allRecords(this.state, "reconcile")) {
         const record = value.record as ReconciliationRecord;
         if (record.status === "prepared") await this.applyPlan(record);
@@ -161,8 +175,8 @@ export class SyncCoordinator {
       const ordered = [...paths].sort((a, b) => Number(!local.has(a)) - Number(!local.has(b)) || a.localeCompare(b));
       for (const path of ordered) {
         if (signal?.aborted) throw new ReconcileError("sync-cancelled");
-        if (allRecords(this.state, "conflict").some(value => (value.record as ConflictRecord).path === path) ||
-            this.outbox.operations().some(op => op.status !== "acknowledged" && (op.path === path || op.targetPath === path))) continue;
+        if (allRecords(this.state, "conflict").some(value => value.record.kind === "conflict" && value.record.status === "open" && value.record.path === path) ||
+            this.outbox.operations().some(op => !["acknowledged", "cancelled"].includes(op.status) && (op.path === path || op.targetPath === path))) continue;
         const here = local.get(path) ?? null, there = remote.files.get(path) ?? null, base = this.outbox.baseline(path);
         if (sameVersion(here, there)) { await this.confirmObserved(path, here); continue; }
         if ((!base && here === null) || base && sameVersion(here, base.version)) {

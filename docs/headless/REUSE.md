@@ -12,7 +12,7 @@
 | `src/lib/api/http_api_service.ts` | `FastSync`、宿主请求、重定向与设置、计时器 | 复用所需下载/API 行为，只适配 HTTP I/O；管理升级等功能不暴露为客户端自动动作 | 取消、范围读取、HTTP/业务错误、重定向边界 |
 | `src/lib/utils/helpers.ts` 的 `hashContent` / `hashContentAsync` / `hashArrayBuffer` / `hashFileAsync` | 异步让出依赖 window；文件哈希依赖 Vault adapter、资源 URL 和 Range fetch | 已移至无宿主依赖的 `protocol_hash.ts`，插件保持 `hashFileAsync` 包装；Node 消费同一算法 | UTF-16、emoji、10 MiB 边界、20 MiB 采样盲区、读入期间文件变化 |
 | `src/lib/sync/operator.ts`、`sync_progress_tracker.ts`、`sync_state.ts` | 扫描 Vault、离线删除确认 UI、进度回调、插件状态 | 已抽取 `batch_sync.ts` 和 `sync_protocol.ts`；插件和 Node 共用库存批次、信封页号及 PageAck，Headless 单独持久化完成条件 | End 提前到达、重复/乱序页、写失败、重启不能跳过未完成项 |
-| `src/lib/sync/operator_note.ts` | `TFile`、Vault、路径锁、pending、缓存、通知/冲突 UI | 已抽取 `note_protocol.ts` 的库存发送、内容落盘及 `noteModification` 请求字段，两端实际消费；Node 不可变发送/读回确认组件已通过合成故障测试，运行入口已接入，冲突决策仍待实现 | 同路径 A 的 Ack 不确认 B；远端落盘前复核；删除/重命名前置条件 |
+| `src/lib/sync/operator_note.ts` | `TFile`、Vault、路径锁、pending、缓存、通知/冲突 UI | 已抽取 `note_protocol.ts` 的库存发送、内容落盘及 `noteModification` 请求字段，两端实际消费；Node 不可变发送/读回确认组件已通过合成故障测试，运行入口和版本化冲突决策已接入 | 同路径 A 的 Ack 不确认 B；远端落盘前复核；删除/重命名前置条件 |
 | `src/lib/sync/operator_file.ts` | `TFile`、Platform、adapter 临时分片、会话、缓存与 HTTP API | 已抽取 `file_protocol.ts` 的库存发送、下载请求、`fileUploadCheck`、二进制帧编码/解码和分片组装；Node 上传从持久快照读取，中断后新建会话并完整重传；已通过原版 3.5.1/3.6.1 的 JSON/protobuf 上传及路径操作验证，完整文件调度入口已接入 | 中断、重复分片、缺片、过期会话、同采样哈希不同内容 |
 | `src/lib/storage/file_hash_manager.ts`、`local_storage_manager.ts` 与镜像工具 | Obsidian 本地存储、adapter、延迟写入 | 插件保留兼容存储；Headless 事务存储实现共享窄接口，不以插件缓存作为持久化成功凭据 | 已确认基线恢复、落盘失败、崩溃恢复、身份错配 |
 
@@ -40,7 +40,7 @@ Headless 新增持久化状态机、内容版本核对及冲突契约；协议�
 | `headless/collection_pull.ts`、`note_pull.ts`、`file_pull.ts`、`download_chunks.ts` | Node 完成与资源策略；共享分页状态机，分片全到齐且内容校验/落盘完成后才推进页；拒绝只读上传请求 | 乱序/重复/缺片、内容改变、End 提前、应用失败、取消、完整 SHA-256、跨进程中断恢复 |
 | `headless/download_batch.ts`、`durable_note_pull.ts`、`durable_file_pull.ts` | 事务批次/会话落盘；重启从零请求远端清单，不采用未完成检查点 | SQLite 提交失败、End 不提交、强制终止后的全量重读、幂等重复与本地冲突保留 |
 
-完整插件回归见 `VALIDATION.md`。目前 Node 的认证身份、完整清单、发送/读回与文件落盘已由 `remote.ts` / `reconcile.ts` / `runtime.ts` 接入独立 CLI。本地完整内容扫描与周期核对见 `headless/scanner.ts` / `test:scan`；双向发送确认与通用同步 CLI 已接入，冲突决策应用仍待实现。
+完整插件回归见 `VALIDATION.md`。目前 Node 的认证身份、完整清单、发送/读回与文件落盘已由 `remote.ts` / `reconcile.ts` / `runtime.ts` 接入独立 CLI。本地完整内容扫描与周期核对见 `headless/scanner.ts` / `test:scan`；双向发送确认与通用同步 CLI 已接入，冲突决策通过同一所有者互斥和官方上传/读回路径应用。
 
 ## 证据边界
 
@@ -50,3 +50,5 @@ Headless 新增持久化状态机、内容版本核对及冲突契约；协议�
 - Next：固定服务端能力验证后，按 OpenSpec 逐项抽取并更新本清单。
 
 `content_routes.ts` 从官方 `HttpApiService.getNoteList/getFileList` 抽取相同查询字段，插件和 Node 的只读身份/回收站查询共用。回收站总行数为零时接受服务端原有的 `list: null`；不新增 REST 写路径。`--reconcile` 在原版 3.5.1/3.6.1 验证真实响应、两客户端双向及 CLI 进程。
+
+`headless/resolution.ts` 仅负责通用决策、版本复核、持久恢复和受控查询；不新增协议动作，不修改上游冲突 UI。决策本地应用复用 `LocalRequests`，远端确认复用 `DurableOutbox` / `uploadOperation`，普通请求恢复跳过尚待重新验证的决策意图。`test:conflicts` 覆盖独立 Bot 进程和七个 SIGKILL 边界。

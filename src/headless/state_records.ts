@@ -29,7 +29,7 @@ export interface OperationRecord extends RecordHeader {
   path: string;
   action: "create" | "modify" | "delete" | "rename";
   targetPath: string | null;
-  status: "pending" | "sent" | "blocked" | "acknowledged";
+  status: "pending" | "sent" | "blocked" | "acknowledged" | "cancelled";
   base: FileVersion | null;
   desired: FileVersion | null;
   expectedRemote: FileVersion | null;
@@ -76,17 +76,29 @@ export interface ApplicationRecord extends RecordHeader {
 
 export interface ConflictRecord extends RecordHeader {
   kind: "conflict";
+  reason?: "versions-changed";
   path: string;
   contentKind: "note" | "file";
   baseStatus: "missing" | "absent" | "present";
   base: FileVersion | null;
   local: FileVersion | null;
   remote: FileVersion | null;
-  status: "open";
+  status: "open" | "superseded" | "resolved";
+}
+
+export interface DecisionRecord extends RecordHeader {
+  kind: "decision";
+  conflictId: string;
+  fingerprint: string;
+  action: "merge" | "keep-local" | "keep-remote" | "delete";
+  desired: FileVersion | null;
+  status: "prepared" | "applied" | "confirmed" | "stale";
+  nextConflictId: string | null;
 }
 
 export interface LocalRequestRecord extends RecordHeader {
   kind: "local-request";
+  decisionId?: string;
   fingerprint: string;
   operation: "create" | "modify" | "delete" | "rename";
   path: string;
@@ -121,13 +133,13 @@ export interface CycleRecord extends RecordHeader {
   fileTime: number;
   fileCount: number;
 }
-export type StateRecord = BindingRecord | OperationRecord | BaselineRecord | BatchRecord | SessionRecord | ApplicationRecord | ConflictRecord | LocalRequestRecord | ScanRecord | ReconciliationRecord | CycleRecord;
+export type StateRecord = BindingRecord | OperationRecord | BaselineRecord | BatchRecord | SessionRecord | ApplicationRecord | ConflictRecord | LocalRequestRecord | ScanRecord | ReconciliationRecord | CycleRecord | DecisionRecord;
 export type RecordKind = StateRecord["kind"];
 
 const digestPattern = /^[a-f0-9]{64}$/;
 const identifierPattern = /^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,127}$/;
 export const validIdentifier = (value: unknown): value is string => typeof value === "string" && identifierPattern.test(value);
-export const RECORD_KINDS: RecordKind[] = ["binding", "operation", "baseline", "batch", "session", "application", "conflict", "local-request", "scan", "reconcile", "cycle"];
+export const RECORD_KINDS: RecordKind[] = ["binding", "operation", "baseline", "batch", "session", "application", "conflict", "local-request", "scan", "reconcile", "cycle", "decision"];
 export const validRecordKind = (value: unknown): value is RecordKind => RECORD_KINDS.includes(value as RecordKind);
 const integer = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -157,6 +169,12 @@ export function validStateRecord(value: unknown): value is StateRecord {
   if (!object(value) || value.formatVersion !== 1 || !validIdentifier(value.id) || !validRecordKind(value.kind)) return false;
   const header = ["formatVersion", "id", "kind"];
   switch (value.kind) {
+    case "decision":
+      return fields(value, [...header, "conflictId", "fingerprint", "action", "desired", "status", "nextConflictId"]) &&
+        validIdentifier(value.conflictId) && typeof value.fingerprint === "string" && digestPattern.test(value.fingerprint) &&
+        ["merge", "keep-local", "keep-remote", "delete"].includes(value.action as string) && validFileVersion(value.desired) &&
+        (value.action !== "delete" || value.desired === null) && (value.action !== "merge" || value.desired !== null) &&
+        ["prepared", "applied", "confirmed", "stale"].includes(value.status as string) && (value.status === "stale" ? validIdentifier(value.nextConflictId) : value.nextConflictId === null);
     case "reconcile":
       return fields(value, [...header, "path", "before", "after", "status"]) && validRelativePath(value.path) &&
         validFileVersion(value.before) && validFileVersion(value.after) && (value.before !== null || value.after !== null) &&
@@ -180,7 +198,7 @@ export function validStateRecord(value: unknown): value is StateRecord {
       return fields(value, [...header, "path", "action", "targetPath", "status", "base", "desired", "expectedRemote", "sessionId", "context", ...(Object.hasOwn(value, "sequence") ? ["sequence"] : [])]) &&
         (value.sequence === undefined || integer(value.sequence) && value.sequence > 0) &&
         validRelativePath(value.path) && ["create", "modify", "delete", "rename"].includes(value.action as string) &&
-        ["pending", "sent", "blocked", "acknowledged"].includes(value.status as string) &&
+        ["pending", "sent", "blocked", "acknowledged", "cancelled"].includes(value.status as string) &&
         validFileVersion(value.base) && validFileVersion(value.desired) && validFileVersion(value.expectedRemote) &&
         (value.action === "delete" ? value.desired === null : value.desired !== null) &&
         (value.action === "rename" ? validRelativePath(value.targetPath) && value.targetPath !== value.path : value.targetPath === null) &&
@@ -210,14 +228,16 @@ export function validStateRecord(value: unknown): value is StateRecord {
         validFileVersion(value.after) && validFileVersion(value.observed) && ["prepared", "applied", "diverged"].includes(value.status as string) &&
         (value.status === "diverged" || value.observed === null);
     case "conflict":
-      return fields(value, [...header, "path", "contentKind", "baseStatus", "base", "local", "remote", "status"]) &&
-        validRelativePath(value.path) && ["note", "file"].includes(value.contentKind as string) && value.status === "open" &&
+      return fields(value, [...header, "path", "contentKind", "baseStatus", "base", "local", "remote", "status", ...(Object.hasOwn(value, "reason") ? ["reason"] : [])]) &&
+        (value.reason === undefined || value.reason === "versions-changed") &&
+        validRelativePath(value.path) && ["note", "file"].includes(value.contentKind as string) && ["open", "superseded", "resolved"].includes(value.status as string) &&
         ["missing", "absent", "present"].includes(value.baseStatus as string) && validFileVersion(value.base) &&
         (value.baseStatus === "present" ? value.base !== null : value.base === null) &&
         validFileVersion(value.local) && validFileVersion(value.remote) &&
-        value.local?.sha256 !== value.remote?.sha256;
+        (value.reason === "versions-changed" || value.local?.sha256 !== value.remote?.sha256);
     case "local-request":
-      return fields(value, [...header, "fingerprint", "operation", "path", "targetPath", "contentKind", "before", "beforeIdentity", "after", "status", "reason"]) &&
+      return fields(value, [...header, "fingerprint", "operation", "path", "targetPath", "contentKind", "before", "beforeIdentity", "after", "status", "reason", ...(Object.hasOwn(value, "decisionId") ? ["decisionId"] : [])]) &&
+        (value.decisionId === undefined || validIdentifier(value.decisionId)) &&
         typeof value.fingerprint === "string" && digestPattern.test(value.fingerprint) && validRelativePath(value.path) &&
         ["create", "modify", "delete", "rename"].includes(value.operation as string) && ["note", "file"].includes(value.contentKind as string) &&
         validFileVersion(value.before) && validFileVersion(value.after) &&

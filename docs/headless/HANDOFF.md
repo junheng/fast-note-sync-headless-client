@@ -4,7 +4,7 @@
 
 用户决定维护官方插件的 fork，将项目定义为 **Fast Note Sync Headless Client**，后续 Agent 在本仓库继续实现。目标是让 Obsidian 与 Bot 的笔记修改双向同步；发生冲突时，Hermes 的“智库馆长”必须负责解决。
 
-当前已有独立 Node `once`/`daemon` 双向文件同步与持久恢复入口，保留原插件构建。原版 3.5.1/3.6.1 的笔记、9 MiB 附件、离线删除、独立 CLI 与重启验证通过；冲突决策、完整目录操作和 Hermes 业务验收尚未完成。Docker 与具体支持边界见 [DOCKER.md](DOCKER.md)，实际验证见 [VALIDATION.md](VALIDATION.md)。历史方案段落不能替代 OpenSpec 任务的当前状态。
+当前已有独立 Node `once`/`daemon` 双向文件同步与持久恢复入口，保留原插件构建。原版 3.5.1/3.6.1 的笔记、9 MiB 附件、离线删除、独立 CLI 与重启验证通过；版本化冲突决策已接入并经真实服务端验证；完整目录操作、资源验收和 Hermes 业务验收尚未完成。Docker 与具体支持边界见 [DOCKER.md](DOCKER.md)，实际验证见 [VALIDATION.md](VALIDATION.md)。历史方案段落不能替代 OpenSpec 任务的当前状态。
 
 后续实施已按用户要求切换为正式稳定版 `2.4.0`（`f2b15c09`），工作分支为 `headless/stable-2.4.0`。原 `1bfb4069` 开发分支提交的验证记录仅作历史证据，不能替代稳定版基线；具体结果和修复状态以验证记录及 OpenSpec 任务为准。
 

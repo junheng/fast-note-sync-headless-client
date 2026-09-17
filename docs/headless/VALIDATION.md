@@ -1,5 +1,17 @@
 # 基线验证记录
 
+## 2026-09-17：通用冲突决策与受控接口
+
+四种决策（合并、保留本地、保留远端、确认删除）已接入持久状态、所有者互斥和官方上传确认。新增分页查询、详情、最大 1 MiB 分块快照、幂等决策查询及 CLI `resolve`，契约见 [CONTROL.md](CONTROL.md)。未引入 Hermes 专用代码。
+
+`test:conflicts` 覆盖文本/二进制、删除对修改、缺失基线、相同 ID 不同载荷、两端版本改变、同协议哈希不同完整摘要、确认丢失后重启读回，以及决策应用与独立 Bot 进程的两种顺序。七个实际 SIGKILL 位置为：决策 prepared、本地意图 prepared、文件发布、本地 applied、操作 sent、操作 acknowledged、决策 confirmed；恢复后逐字节与持久终态一致。另在未发布的本地意图后改变远端，确认普通恢复不会执行陈旧决策。
+
+3.5.1 / 3.6.1 固定原版服务端分别通过增强 `--reconcile`：双端并发编辑产生冲突，合并和重复决定后内容收敛；实际 daemon/CLI 经控制入口查询版本、分块读取远端快照和提交合并，另一客户端完整读回一致。`runtime-identity.test.mjs` 验证实际运行入口在认证主体、端点、Vault、目录和同路径 inode 错配时不重放删除，保留文件与数据库；认证失败和 UID 无法取得同样拒绝恢复，相同主体的换 token 对照通过。
+
+相关状态、同步、冲突、本地入口、CLI、插件/Node 构建和 lint 回归通过。OpenSpec 本轮更新到 **35/50**；完整目录操作、资源上限专项、实际 Obsidian 操作矩阵和外部 Hermes 业务回执仍未完成。
+
+双向基础入口提交 `11fb4316a6cb32c3f5b87f0f229538a2f3396519` 的 [Gitea run 29](https://g1t.sigmoid.cc:53691/diomgis/fast-note-sync-headless-client/actions/runs/29) 已成功发布 ARM64 镜像 `g1t.sigmoid.cc:53691/diomgis/fast-note-sync-headless-client@sha256:d52bf83cd33faf3bdbd766b9f0a317ecd1b341c8b91b801f67cffdff5a5b6dd8`。该提交具备双向和常驻，但不包含本节之后才加入的冲突决定，使用方需固定与所验收功能匹配的源码/镜像版本。
+
 ## 2026-09-17：双向运行入口与容器增量
 
 `SyncCoordinator` 已将认证身份、完整远端清单、不可变 outbox、本地扫描、下载恢复和共同基线接成整轮同步。`once`、`daemon`、`status`、`local-write` 使用独立 Node 构建，Docker 默认 `daemon`。最后本地扫描与 `cycle` 确认共用互斥，避免受控编辑插入扫描和成功提交之间。

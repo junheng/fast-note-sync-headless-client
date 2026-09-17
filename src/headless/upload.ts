@@ -39,7 +39,7 @@ export async function uploadOperation(owner: OwnedDirectories, state: StateStore
   if (activeOwners.has(owner)) throw new UploadError("upload-failed");
   identity.assertConnection(options.endpoint, options.vault);
   const stored = state.get("operation", operationId);
-  if (!stored || stored.record.kind !== "operation" || stored.record.status === "acknowledged") throw new UploadError("upload-failed");
+  if (!stored || stored.record.kind !== "operation" || ["acknowledged", "cancelled"].includes(stored.record.status)) throw new UploadError("upload-failed");
   const duration = options.transferTimeoutMs ?? 60000;
   if (!Number.isSafeInteger(duration) || duration < 1 || duration > 300000) throw new UploadError("upload-limit");
   const outbox = new DurableOutbox(owner, state, identity), snapshots = new SnapshotStore(owner.state);

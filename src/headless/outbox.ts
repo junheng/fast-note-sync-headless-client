@@ -66,7 +66,7 @@ export class DurableOutbox {
             !sameVersion(identified.desired, desired) || !sameVersion(identified.expectedRemote, expectedRemote)) throw new OutboxError("invalid-operation");
         return identified;
       }
-      const prior = existing.filter(op => op.path === path && op.status !== "acknowledged").at(-1);
+      const prior = existing.filter(op => op.path === path && !["acknowledged", "cancelled"].includes(op.status)).at(-1);
       if (!operationId && prior && sameVersion(prior.desired, desired) && sameVersion(prior.expectedRemote, expectedRemote) && prior.action === action && prior.targetPath === targetPath) return prior;
       if (existing.length >= 10000) throw new OutboxError("operation-limit");
       const record: OperationRecord = { formatVersion: 1, kind: "operation", id: operationId ?? randomUUID(), path, action, targetPath,
@@ -84,9 +84,9 @@ export class DurableOutbox {
       const stored = this.state.get("operation", id);
       if (!stored || stored.record.kind !== "operation") throw new OutboxError("operation-not-found");
       const record = stored.record;
-      if (record.status === "acknowledged") throw new OutboxError("operation-order");
+      if (["acknowledged", "cancelled"].includes(record.status)) throw new OutboxError("operation-order");
       const paths = new Set([record.path, ...(record.targetPath ? [record.targetPath] : [])]);
-      const first = this.operations().find(op => op.status !== "acknowledged" &&
+      const first = this.operations().find(op => !["acknowledged", "cancelled"].includes(op.status) &&
         (paths.has(op.path) || op.targetPath !== null && paths.has(op.targetPath)));
       if (first?.id !== id) throw new OutboxError("operation-order");
       if (record.desired) this.snapshots.read(record.desired);
@@ -102,7 +102,7 @@ export class DurableOutbox {
       this.identity.assertVerified();
       const stored = this.state.get("operation", id);
       if (!stored || stored.record.kind !== "operation") throw new OutboxError("operation-not-found");
-      if (stored.record.status !== "acknowledged") this.state.commit([{ type: "put", record: { ...stored.record, status: "blocked" }, expectedRevision: stored.revision }]);
+      if (!["acknowledged", "cancelled"].includes(stored.record.status)) this.state.commit([{ type: "put", record: { ...stored.record, status: "blocked" }, expectedRevision: stored.revision }]);
     });
   }
 

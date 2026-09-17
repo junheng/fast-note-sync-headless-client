@@ -7,7 +7,7 @@ import type { LocalRequests, LocalRequest } from "./local_requests";
 
 const MAX_FRAME = 16 * 1024 * 1024;
 const MAX_CLIENTS = 4;
-const ERROR_CODES = new Set(["invalid-local-request", "request-id-reused", "local-writer-contract-required", "invalid-path", "unsafe-path", "identity-mismatch", "case-collision", "filesystem-limit", "filesystem-failed", "state-write-failed", "state-corrupt", "state-limit", "snapshot-corrupt", "snapshot-missing", "snapshot-limit", "snapshot-invalid", "not-found", "already-exists"]);
+const ERROR_CODES = new Set(["invalid-decision", "decision-id-reused", "decision-pending", "resolution-stale", "conflict-read-limit", "conflict-not-found", "snapshot-invalid", "invalid-local-request", "request-id-reused", "local-writer-contract-required", "invalid-path", "unsafe-path", "identity-mismatch", "case-collision", "filesystem-limit", "filesystem-failed", "state-write-failed", "state-corrupt", "state-limit", "snapshot-corrupt", "snapshot-missing", "snapshot-limit", "snapshot-invalid", "not-found", "already-exists"]);
 export class ControlError extends Error {
   constructor(public readonly code: "invalid-control-request" | "control-unavailable" | "control-permissions" | "control-limit" | "control-timeout") { super(code); this.name = "ControlError"; }
 }

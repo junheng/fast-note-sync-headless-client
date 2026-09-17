@@ -2,7 +2,7 @@
 
 面向服务器、容器和 Agent 的 Fast Note Sync 双向同步客户端，基于 [官方 Obsidian 插件](https://github.com/haierkeys/obsidian-fast-note-sync)维护 fork。
 
-**当前状态：独立 Node 双向文件同步和常驻入口已接通，完整 MVP 仍在验收与完善。** `once`、`daemon` 支持持久状态恢复；笔记和附件已在固定原版服务端验证双向收敛。冲突决策、完整目录操作和 Hermes 业务验收尚未完成。Docker 默认运行 `daemon`，配置方式见 [Docker 交付说明](docs/headless/DOCKER.md)。历史只读镜像不能替代新的双向构建。原项目说明保存在 [README.upstream.md](README.upstream.md)。
+**当前状态：独立 Node 双向文件同步和常驻入口已接通，完整 MVP 仍在验收与完善。** `once`、`daemon` 支持持久状态恢复；笔记和附件已在固定原版服务端验证双向收敛。通用冲突决策已接通；完整目录操作、资源验收和 Hermes 业务验收尚未完成。Docker 默认运行 `daemon`，配置方式见 [Docker 交付说明](docs/headless/DOCKER.md)。历史只读镜像不能替代新的双向构建。原项目说明保存在 [README.upstream.md](README.upstream.md)。
 
 ## 目标
 
@@ -19,7 +19,7 @@
 2. [实现交接方案](docs/headless/HANDOFF.md)：已知事实、架构、分阶段任务及验收标准。
 3. [上游维护方案](docs/headless/UPSTREAM.md)：fork 基线、合并方式与发布门禁。
 
-当前实施清单见 [OpenSpec tasks](openspec/changes/add-headless-integration-mvp/tasks.md)，实际验证与已知阻塞见 [VALIDATION.md](docs/headless/VALIDATION.md)。后续推进冲突决策、目录操作、资源限制与完整集成验收。
+当前实施清单见 [OpenSpec tasks](openspec/changes/add-headless-integration-mvp/tasks.md)，实际验证与已知阻塞见 [VALIDATION.md](docs/headless/VALIDATION.md)。冲突调用方式见 [控制契约](docs/headless/CONTROL.md)。后续推进目录操作、资源限制与完整集成验收。
 
 ## 模块方向
 

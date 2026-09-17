@@ -40,6 +40,17 @@ export async function probeReconcile({ endpoint, token, onStage, withContainer =
       const empty = await cycle(a, `${kind}-idempotent`); assert.equal(empty.uploaded, 0); assert.equal(empty.downloaded, 0);
       results.push({ kind, bidirectional: true, restart: true, offlineDelete: true, idempotent: true, fullReadback: true, bytes: bytes.length });
     }
+    onStage("conflict-resolution");
+    await edit(a, "conflict.md", Buffer.from("base")); await cycle(a, "conflict-base-upload"); await cycle(b, "conflict-base-download");
+    await edit(a, "conflict.md", Buffer.from("local")); await edit(b, "conflict.md", Buffer.from("remote")); await cycle(b, "conflict-remote-edit");
+    assert.equal((await a.sync.once()).status, "conflict");
+    let conflict = a.sync.resolver.list().conflicts.find(value => value.status === "open");
+    const expected = version => version ? { sha256: version.sha256, size: version.size } : null;
+    const decision = { schemaVersion: 1, decisionId: "probe-merge", conflictId: conflict.id, action: "merge", expectedLocal: expected(conflict.local), expectedRemote: expected(conflict.remote), contentBase64: Buffer.from("merged").toString("base64") };
+    assert.equal((await a.sync.resolve(decision)).status, "resolved");
+    assert.equal((await a.sync.resolve(decision)).status, "resolved");
+    await cycle(b, "conflict-merge-readback"); assert.equal(b.owner.vault.read("conflict.md").toString(), "merged");
+    results.push({ conflictResolution: true, merge: true, duplicateDecision: true, fullReadback: true });
     onStage("cli-once");
     execFileSync(process.execPath, ["scripts/build-headless.mjs"], { stdio: "pipe" });
     const cliVault = path.join(root, "cli-vault"), cliState = path.join(root, "cli-state");
@@ -80,6 +91,30 @@ export async function probeReconcile({ endpoint, token, onStage, withContainer =
       for (const privateValue of [token, endpoint, root, "daemon synthetic", "daemon.md"]) assert.equal((stdout + stderr + resumed).includes(privateValue), false);
       results.push({ cliOnce: true, daemon: true, controlledWrite: true, exclusiveOwnership: true, gracefulStop: true, resumed: true, privateOutput: true });
     } finally { if (daemon.exitCode === null) daemon.kill("SIGKILL"); await exited; }
+    onStage("cli-conflict-control");
+    await writeFile(path.join(cliVault, "conflict.md"), "cli local");
+    await edit(b, "conflict.md", Buffer.from("cli remote")); await cycle(b, "cli-conflict-remote-edit");
+    const resolverDaemon = spawn(process.execPath, ["dist/headless/cli.cjs", "daemon"], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let controlOutput = ""; resolverDaemon.stdout.on("data", bytes => { controlOutput += bytes; }); resolverDaemon.stderr.resume();
+    const resolverExited = new Promise(resolve => resolverDaemon.once("exit", code => resolve(code)));
+    try {
+      const deadline = Date.now() + 60000;
+      while (!controlOutput.includes('"conflict"')) { if (Date.now() > deadline || resolverDaemon.exitCode !== null) throw new Error("resolver-daemon-failed"); await new Promise(resolve => setTimeout(resolve, 100)); }
+      const listing = await api.sendControl(cliState, { schemaVersion: 1, action: "conflict-list", request: {} });
+      assert.equal(listing.ok, true); conflict = listing.result.conflicts.find(value => value.status === "open"); assert.ok(conflict);
+      const detail = await api.sendControl(cliState, { schemaVersion: 1, action: "conflict-detail", request: { conflictId: conflict.id } }); assert.equal(detail.result.local.sha256, fullDigest(Buffer.from("cli local")));
+      const snapshot = await api.sendControl(cliState, { schemaVersion: 1, action: "conflict-snapshot", request: { conflictId: conflict.id, side: "remote", offset: 0, length: 1024 } });
+      assert.equal(Buffer.from(snapshot.result.contentBase64, "base64").toString(), "cli remote");
+      const request = { ...decision, decisionId: "cli-merge", conflictId: conflict.id, expectedLocal: expected(conflict.local), expectedRemote: expected(conflict.remote), contentBase64: Buffer.from("cli merged").toString("base64") };
+      const receipt = execFileSync(process.execPath, ["dist/headless/cli.cjs", "resolve"], { env, input: JSON.stringify(request), encoding: "utf8", timeout: 60000, stdio: ["pipe", "pipe", "pipe"] });
+      assert.equal(JSON.parse(receipt).result.status, "resolved");
+      const status = execFileSync(process.execPath, ["dist/headless/cli.cjs", "decision", request.decisionId], { env, encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "pipe"] });
+      assert.equal(JSON.parse(status).result.synchronization, "confirmed");
+      await cycle(b, "cli-resolution-readback"); assert.equal(b.owner.vault.read("conflict.md").toString(), "cli merged");
+      assert.equal((await readFile(path.join(cliVault, "conflict.md"))).toString(), "cli merged");
+      resolverDaemon.kill("SIGTERM"); const timer = setTimeout(() => resolverDaemon.kill("SIGKILL"), 10000); assert.equal(await resolverExited, 130); clearTimeout(timer);
+      results.push({ controlledConflictQuery: true, boundedSnapshots: true, cliDecision: true, confirmedMerge: true });
+    } finally { if (resolverDaemon.exitCode === null) resolverDaemon.kill("SIGKILL"); await resolverExited; }
     if (withContainer) {
       onStage("container-bidirectional");
       const vault = path.join(root, "container-vault"), state = path.join(root, "container-state"), credentials = path.join(root, "container-token");

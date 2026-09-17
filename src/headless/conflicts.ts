@@ -22,7 +22,7 @@ export class ConflictStore {
     this.snapshots = new SnapshotStore(owner.state);
   }
 
-  async capture(id: string, path: string, remoteInput: Uint8Array | null, kind: ContentKind, baseInput: ConflictBase): Promise<ConflictRecord> {
+  async capture(id: string, path: string, remoteInput: Uint8Array | null, kind: ContentKind, baseInput: ConflictBase, staleDecision = false): Promise<ConflictRecord> {
     if (!validIdentifier(id) || !validRelativePath(path) || !baseInput ||
         !["missing", "absent", "present"].includes(baseInput.status) ||
         (remoteInput !== null && remoteInput.byteLength > 128 * 1024 * 1024)) throw new ConflictError("invalid-conflict");
@@ -32,7 +32,7 @@ export class ConflictStore {
       if (this.state.get("conflict", id)) throw new ConflictError("invalid-conflict");
       if (base.status === "present") this.snapshots.read(base.version);
       const localBytes = this.owner.vault.readOptional(path);
-      if ((localBytes === null ? null : fullDigest(localBytes)) === (remoteBytes === null ? null : fullDigest(remoteBytes))) throw new ConflictError("invalid-conflict");
+      if (!staleDecision && (localBytes === null ? null : fullDigest(localBytes)) === (remoteBytes === null ? null : fullDigest(remoteBytes))) throw new ConflictError("invalid-conflict");
       const local = localBytes === null ? null : await this.snapshots.put(localBytes, kind);
       const remote = remoteBytes === null ? null : await this.snapshots.put(remoteBytes, kind);
       const current = this.owner.vault.readOptional(path);
@@ -40,7 +40,7 @@ export class ConflictStore {
       const record: ConflictRecord = {
         formatVersion: 1, kind: "conflict", id, path, contentKind: kind,
         baseStatus: base.status, base: base.status === "present" ? base.version : null,
-        local, remote, status: "open",
+        local, remote, status: "open", ...(staleDecision ? { reason: "versions-changed" as const } : {}),
       };
       this.state.commit([{ type: "put", record, expectedRevision: null }]);
       return record;
